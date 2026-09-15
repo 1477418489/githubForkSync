@@ -1,0 +1,29 @@
+{
+  "name": "github-fork-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sync GitHub forks with their upstream repositories on Cloudflare Workers.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "npm run db:local && wrangler dev",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs",
+    "check:ui": "node --check public/app.js",
+    "check:scripts": "node --check scripts/deploy.mjs",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "check": "npm run typecheck && npm test && npm run check:ui && npm run check:scripts && npm run build",
+    "deploy": "npm run check && node scripts/deploy.mjs",
+    "setup:token": "node scripts/deploy.mjs --setup-token",
+    "logs": "wrangler tail --format pretty"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260915.1",
+    "typescript": "6.0.3",
+    "wrangler": "4.131.2"
+  }
+}
