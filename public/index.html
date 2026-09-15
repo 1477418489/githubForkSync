@@ -38,7 +38,7 @@
             <p class="muted">输入部署时生成的设置码，创建管理密码。接着即可在页面添加 GitHub Token 和同步仓库。</p>
           </div>
           <form id="setup-form" class="stack-form">
-            <div><label for="setup-token">首次设置码</label><input id="setup-token" type="password" minlength="64" maxlength="64" autocomplete="off" required /><p class="field-note">设置码显示在首次部署的终端输出中。</p></div>
+            <div><label for="setup-token">首次设置码</label><input id="setup-token" type="password" minlength="64" maxlength="64" autocomplete="off" required /><p class="field-note">从最近一次部署日志或终端输出中复制设置码；重新部署后请使用新码。</p></div>
             <div><label for="setup-password">管理密码</label><input id="setup-password" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="至少 12 个字符" required /></div>
             <div><label for="setup-confirm">确认管理密码</label><input id="setup-confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" required /></div>
             <button type="submit">完成首次设置 <span aria-hidden="true">→</span></button>

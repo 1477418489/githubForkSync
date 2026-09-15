@@ -55,13 +55,24 @@ function requireExistingKey(secrets) {
   }
 }
 
+async function issueSetupToken(run, randomSecret, log) {
+  const token = randomSecret();
+  await run(["secret", "put", "SETUP_TOKEN"], { input: token + "\n" });
+  log([
+    "",
+    "========== 首次设置码（SETUP_TOKEN） ==========",
+    token,
+    "请在管理页面输入以上设置码，创建管理员密码。",
+    "旧设置码已失效；创建管理员后，此码也会失效。",
+    "==============================================",
+    "",
+  ].join("\n"));
+}
+
 // 依赖注入用于验证真实部署的顺序、失败处理和凭据传递；测试不访问 Cloudflare。
 export async function runDeployment({ config, run, saveConfig, log = console.log,
-  randomSecret = () => randomBytes(32).toString("hex"), showSetupToken = false, setupTokenOnly = false }) {
+  randomSecret = () => randomBytes(32).toString("hex"), setupTokenOnly = false }) {
   const binding = dbBinding(config);
-  if (setupTokenOnly && !showSetupToken) {
-    throw new Error("请在本地交互终端运行 npm run setup:token；设置码不会写入 CI 日志或重定向输出。");
-  }
   if (setupTokenOnly && binding.database_id === PLACEHOLDER_DATABASE_ID) {
     throw new Error("数据库尚未绑定，请先运行 npm run deploy。");
   }
@@ -84,9 +95,7 @@ export async function runDeployment({ config, run, saveConfig, log = console.log
   if (setupTokenOnly) {
     if (initialized) throw new Error("首次设置已完成，设置码已失效。此命令不能重置管理员密码。");
     if (!(await listSecrets(run)).has("ENCRYPTION_KEY")) throw new Error("缺少 ENCRYPTION_KEY，请先运行 npm run deploy 完成部署。");
-    const token = randomSecret();
-    await run(["secret", "put", "SETUP_TOKEN"], { input: token + "\n" });
-    log("首次设置码已更新，旧设置码立即失效：\n" + token);
+    await issueSetupToken(run, randomSecret, log);
     return;
   }
 
@@ -99,14 +108,8 @@ export async function runDeployment({ config, run, saveConfig, log = console.log
     await run(["secret", "put", "ENCRYPTION_KEY"], { input: randomSecret() + "\n" });
     log("加密密钥已保存到 Cloudflare Workers Secret。");
   }
-  if (!initialized && !secrets.has("SETUP_TOKEN")) {
-    const token = randomSecret();
-    await run(["secret", "put", "SETUP_TOKEN"], { input: token + "\n" });
-    if (showSetupToken) log("首次设置码（用于网页创建管理员，请妥善保存）：\n" + token);
-    else log("首次设置码已保存到 Cloudflare；请在本地终端运行 npm run setup:token 获取新的设置码。");
-  } else if (!initialized) {
-    log("已有首次设置码。若已遗失，请在本地终端运行 npm run setup:token。");
-  }
+  // Cloudflare 不返回已有 Secret 的明文；初始化前每次部署重发设置码，便于从当前日志获取。
+  if (!initialized) await issueSetupToken(run, randomSecret, log);
   log(initialized ? "部署完成，已有页面配置和密钥已保留。" : "部署完成。打开 Worker 地址，使用首次设置码创建管理员，然后在页面填写同步设置。");
 }
 
@@ -159,7 +162,6 @@ async function main() {
     config,
     run: wranglerRunner(root),
     saveConfig: (value) => writeFile(configPath, JSON.stringify(value, null, 2) + "\n"),
-    showSetupToken: Boolean(process.stdin.isTTY && process.stdout.isTTY && !process.env.CI && !process.env.GITHUB_ACTIONS),
     setupTokenOnly: args[0] === "--setup-token",
   });
 }
