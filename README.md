@@ -4,7 +4,7 @@
 
 - 支持 1–20 个 Fork，每个仓库同步默认分支或指定的一个分支。
 - 使用 GitHub 官方 `merge-upstream` API，保留 Fork 自有提交；遇到冲突停止该仓库的同步，不强制推送。
-- 页面支持配置检查、手动同步、暂停自动同步，以及查看最近一次运行结果。
+- 页面支持配置检查、手动同步、暂停自动同步，保留最近 20 条运行记录并显示预计下次自动同步时间。
 - 配置、登录会话和运行结果保存在 D1；GitHub Token 加密保存，读取配置时不会回显。
 - TypeScript + Workers 原生 API，前端为 HTML/CSS/JavaScript，无运行时 npm 依赖。
 
@@ -158,6 +158,7 @@ Cloudflare 控制台中的 Worker 名称必须与 `wrangler.jsonc` 的 `name` �
 | 仓库、分支、同步间隔和开关 | D1 `app_settings` | 管理接口登录后才能读写 |
 | 登录会话 | D1 `sessions` | 只存会话 Token 的 SHA-256 摘要和有效期 |
 | 最近一次运行结果、同步锁 | D1 `sync_state` | 用于刷新结果和避免重叠执行 |
+| 最近 20 条运行记录 | D1 `sync_history` | 按完成顺序保存完整报告，超出上限自动清理最旧记录 |
 | 登录/设置尝试计数 | D1 `auth_attempts` | 按 IP 的哈希值和时间窗口记录 |
 | 加密根密钥 | Workers Secret `ENCRYPTION_KEY` | 部署脚本随机生成，不存入 D1 |
 | 首次设置码 | Workers Secret `SETUP_TOKEN` 和部署输出 | 初始化前每次部署重新生成并打印，管理员创建后失效 |
@@ -195,6 +196,8 @@ Cloudflare Cron 每 15 分钟唤醒一次 Worker。应用读取 D1 中的配置�
 
 间隔按上一次自动任务的 Cron 计划时间计算，避免几秒调度抖动导致额外跳过一轮；失败也会推迟下一次自动尝试，手动运行不重置自动任务间隔。首次启用后会在后续符合条件的 Cron 执行时开始，不保证整点或固定北京时间。Cron 有传播和调度延迟，不能当作精确计时器。
 
+同步概览显示**预计下次同步时间**，按浏览器所在时区展示。服务根据上一次自动任务的计划时间、当前同步间隔和读取配置时刻之后的 15 分钟 Cron 触发点估算；首次启用时显示下一个触发点。保存新间隔或刷新页面会重新计算，暂停同步或配置不完整时不安排下次时间。该时间是估算值，实际执行可能受到 Cron 调度延迟和正在运行的同步任务影响。
+
 自动任务不依赖页面保持打开。手动同步时请等待结果；客户端断开后不保证请求继续执行，可以刷新最近记录或检查 GitHub 仓库确认结果。D1 中的同步锁覆盖手动任务和 Cron；异常中断后最多保留 10 分钟。
 
 按 [D1 官方价格说明](https://developers.cloudflare.com/d1/platform/pricing/)，Free 计划包含：
@@ -205,7 +208,7 @@ Cloudflare Cron 每 15 分钟唤醒一次 Worker。应用读取 D1 中的配置�
 | 写入行数 | 每天 10 万行 |
 | 总存储 | 5 GB |
 
-正常个人使用只保存少量配置和一份最近报告，适合先使用免费计划。实际仍受 D1、Workers 的请求/CPU/子请求限制，以及 GitHub API 限额约束；使用付费计划时按该账号的计费规则处理，不能保证所有使用量均免费。
+正常个人使用只保存少量配置和最近 20 条报告，适合先使用免费计划。实际仍受 D1、Workers 的请求/CPU/子请求限制，以及 GitHub API 限额约束；使用付费计划时按该账号的计费规则处理，不能保证所有使用量均免费。
 
 每个仓库最多发出两次 GitHub 请求，20 个仓库最多 40 次，另有少量 D1 操作。Free 限额以 [Workers 官方限制](https://developers.cloudflare.com/workers/platform/limits/) 为准。
 
@@ -218,6 +221,8 @@ npm run deploy
 ```
 
 依赖或锁文件发生变化时，先运行 `npm ci` 安装锁定的依赖。部署脚本复用数据库、只执行未应用的迁移，并保留已有密钥与页面配置。迁移失败就停止发布。若部署中途失败，可修复原因后重新运行；已经创建的数据库会按名称复用。
+
+运行记录功能通过 [0002_sync_history.sql](./migrations/0002_sync_history.sql) 增加历史表。`npm run deploy` 会自动执行该迁移，将旧版本已有的最近一条报告带入历史列表；此前已被覆盖的记录无法恢复。
 
 本项目只自动处理 `wrangler.jsonc` 的默认环境。要部署独立的第二套服务，使用独立目录并修改 Worker `name`、D1 `database_name`，将该新服务的 `database_id` 设为全零占位值。不要让两个不同密钥的 Worker 共用同一个配置数据库。
 
@@ -266,7 +271,7 @@ npm run build      # Wrangler dry run，不发布
 npm run check      # 运行全部检查
 ```
 
-测试覆盖初始迁移、页面配置持久化、凭据加密、初始化竞争、会话失效、并发配置修改、定时频率与同步锁、GitHub 错误分类，以及部署中断、加密密钥保留、设置码重发和非交互 CI 的设置码输出。测试不替代实际账号权限和线上运行验证。
+测试覆盖数据库迁移、页面配置持久化、凭据加密、初始化竞争、会话失效、并发配置修改、定时频率与同步锁、历史记录保留和事务回滚、下次同步时间估算、GitHub 错误分类，以及部署中断、加密密钥保留、设置码重发和非交互 CI 的设置码输出。测试不替代实际账号权限和线上运行验证。
 
 ## HTTP API
 
@@ -279,9 +284,19 @@ npm run check      # 运行全部检查
 | POST | `/api/setup` | 首次设置码 | JSON：`{setupToken, password}`；创建唯一管理员并登录 |
 | POST | `/api/login` | 管理密码 | JSON：`{password}`；设置会话 Cookie |
 | POST | `/api/logout` | 当前 Cookie | 注销当前会话 |
-| GET | `/api/config` | 登录 | 获取配置、Token 是否已设置、同步锁状态和最近运行报告 |
+| GET | `/api/config` | 登录 | 获取配置、Token 是否已设置、同步锁状态、最近 20 条报告和预计下次同步时间 |
 | PUT | `/api/config` | 登录 | 保存页面配置，可更新 Token 或管理密码 |
 | POST | `/api/sync` | 登录 | 同步全部已保存仓库，或执行只读配置检查 |
+
+`GET /api/config` 和保存配置成功后的响应包含以下运行信息：
+
+| 字段 | 含义 |
+| --- | --- |
+| `lastRun` | 最近一次完整报告；尚无记录时为 `null`，保留原有接口字段 |
+| `recentRuns` | 最近 20 条完整报告，按完成顺序倒序排列；尚无记录时为 `[]` |
+| `historyLimit` | 当前历史记录上限，固定为 `20` |
+| `nextSyncAt` | 预计下次自动同步时间，使用 UTC ISO 8601 字符串；暂停或配置不完整时为 `null` |
+| `running` | 是否存在尚未过期的同步锁 |
 
 `PUT /api/config` 必须包含 `revision`、`repositories`、`syncEnabled`、`intervalMinutes`。可选 `githubToken`：省略或空字符串保留，`null` 删除，新字符串覆盖；可选 `password` 更新密码。仓库项目格式：
 
@@ -307,7 +322,9 @@ Invoke-RestMethod -Method Post -Uri "$workerUrl/api/logout" -WebSession $forkSyn
 
 ## 运行记录与故障处理
 
-最近一份检查或同步报告保存在 D1，刷新页面可查看，包括 Cron 结果。新的检查/同步覆盖上一份报告，不提供完整历史列表。报告区分 `synced`、`up_to_date`、`checked`、`failed`、`skipped`。
+最近 **20 条**已完成的配置检查、手动同步和自动同步报告保存在 D1，按完成顺序倒序展示。每条记录包含执行时间、运行方式、结果汇总和各仓库的结果，点击记录可展开详情；失败报告也会保留。超出 20 条时自动删除最旧记录，刷新或重新部署后仍可查看。
+
+页面上方继续显示最近一次结果，历史列表包含该次运行。自动同步处于暂停状态、尚未到执行间隔或已有同步锁时，跳过的 Cron 唤醒不产生历史记录。报告区分 `synced`、`up_to_date`、`checked`、`failed`、`skipped`；刷新按钮同时更新记录和预计下次同步时间。
 
 ```sh
 npm run logs

@@ -54,6 +54,8 @@ input::placeholder { color: #9ba69d; }
 .count { font-size: 12px; background: #eaf0e6; color: #77906e; padding: 3px 7px; border-radius: 5px; vertical-align: middle; margin-left: 7px; }
 .toolbar { padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--border); }
 .toolbar p { font-size: 12px; color: var(--muted); margin: 0; }
+.schedule-overview { display: grid; gap: 7px; }
+.toolbar .schedule-next { color: var(--green); line-height: 1.6; }
 .actions { display: flex; gap: 8px; }
 .repositories { list-style: none; margin: 0; padding: 0; }
 .repository { padding: 23px 24px; }
@@ -80,6 +82,12 @@ details { margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--borde
 summary { color: #7f9080; font-size: 11px; cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.65; color: #62745e; max-height: 400px; overflow: auto; margin-bottom: 0; }
 .history-note { font-size: 11px; color: #95a091; line-height: 1.8; margin: 16px 0 0; }
+.history-entry { margin-top: 14px; padding-top: 14px; }
+.history-entry summary { color: var(--green); font-size: 12px; line-height: 2; }
+.history-entry summary .badge { margin-left: 10px; }
+.history-stats { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.history-results { padding-left: 18px; color: #62745e; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.history-results li + li { margin-top: 8px; }
 .notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 42px; padding: 43px 0 45px; }
 .note-number { color: #98aa91; font-size: 10px; font-family: monospace; }
 h3 { color: #64785f; font-size: 13px; font-weight: 600; margin: 10px 0 9px; }

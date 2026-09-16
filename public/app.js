@@ -41,6 +41,10 @@ function clearPrivateState() {
   byId("run-json").textContent = "";
   byId("run-summary").textContent = "";
   byId("run-result").hidden = true;
+  byId("run-history").replaceChildren();
+  byId("history-count").textContent = "";
+  byId("history-empty").hidden = false;
+  byId("next-sync").textContent = "";
 }
 
 async function api(path, { method = "GET", body } = {}) {
@@ -108,16 +112,56 @@ function renderRepositories(repositories, report = null) {
   }
 }
 
+function formatTime(value) {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false, timeZoneName: "short" });
+}
+
+function reportSummary(report) {
+  const s = report.summary;
+  return report.dryRun
+    ? "检查通过 " + s.checked + " · 失败 " + s.failed + " · 跳过 " + s.skipped
+    : "已更新 " + s.synced + " · 已是最新 " + s.up_to_date + " · 失败 " + s.failed + " · 跳过 " + s.skipped;
+}
+
 function renderReport(report) {
   byId("run-result").hidden = !report;
   if (!report) { byId("run-json").textContent = ""; return; }
   byId("run-title").textContent = "最近一次" + (report.dryRun ? "配置检查" : "同步") + (report.trigger === "scheduled" ? " · 定时任务" : " · 手动执行");
-  byId("run-time").textContent = new Date(report.finishedAt).toLocaleString("zh-CN", { hour12: false });
-  const s = report.summary;
-  byId("run-summary").textContent = report.dryRun
-    ? "检查通过 " + s.checked + " · 失败 " + s.failed + " · 跳过 " + s.skipped
-    : "已更新 " + s.synced + " · 已是最新 " + s.up_to_date + " · 失败 " + s.failed + " · 跳过 " + s.skipped;
+  byId("run-time").textContent = formatTime(report.finishedAt);
+  byId("run-summary").textContent = reportSummary(report);
   byId("run-json").textContent = JSON.stringify(report, null, 2);
+}
+
+function renderHistory(reports, limit) {
+  const list = byId("run-history");
+  list.replaceChildren();
+  byId("history-empty").hidden = reports.length > 0;
+  byId("history-count").textContent = "已保留 " + reports.length + " / " + limit + " 条";
+  for (const report of reports) {
+    const entry = document.createElement("details");
+    entry.className = "history-entry";
+    const heading = document.createElement("summary");
+    const kind = report.dryRun ? "配置检查" : report.trigger === "scheduled" ? "自动同步" : "手动同步";
+    heading.textContent = formatTime(report.finishedAt) + " · " + kind;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.dataset.status = report.ok ? "synced" : "failed";
+    badge.textContent = report.ok ? "成功" : "存在失败或跳过";
+    heading.append(badge);
+    const summary = document.createElement("p");
+    summary.className = "history-stats";
+    summary.textContent = reportSummary(report);
+    const results = document.createElement("ul");
+    results.className = "history-results";
+    for (const result of report.results) {
+      const item = document.createElement("li");
+      item.textContent = result.repository + (result.branch ? "（" + result.branch + "）" : "")
+        + " · " + (statusLabels[result.status] || result.status) + "：" + result.message;
+      results.append(item);
+    }
+    entry.append(heading, summary, results);
+    list.append(entry);
+  }
 }
 
 function addRepository(target = {}) {
@@ -155,8 +199,12 @@ async function loadConfig(fillForm = true) {
   config = await api("/api/config");
   showScreen("workspace");
   byId("schedule-status").textContent = config.running ? "同步任务正在执行，稍后刷新查看结果" : config.syncEnabled ? "自动同步 · " + intervalLabel(config.intervalMinutes) : "自动同步已暂停";
+  byId("next-sync").textContent = config.nextSyncAt
+    ? "预计下次同步：" + formatTime(config.nextSyncAt)
+    : config.syncEnabled ? "下次同步：完成 Token 和仓库配置后安排" : "下次同步：已暂停";
   renderRepositories(config.repositories, config.lastRun);
   renderReport(config.lastRun);
+  renderHistory(config.recentRuns ?? (config.lastRun ? [config.lastRun] : []), config.historyLimit ?? 20);
   if (fillForm) fillSettings(config);
   setBusy(busy);
 }

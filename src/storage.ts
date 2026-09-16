@@ -1,7 +1,10 @@
 import { ConfigurationError, MAX_REPOSITORIES, parseRepositories, SYNC_INTERVALS, validateGitHubToken, validatePassword } from "./config.ts";
 import { encryptToken, hashPassword, requireEncryptionKey } from "./crypto.ts";
 import { allowFields, HttpError } from "./http.ts";
-import type { Database, Env, SettingsRow, SyncStateRow } from "./types.ts";
+import type { Database, Env, SettingsRow, SyncReport, SyncStateRow } from "./types.ts";
+
+export const RUN_HISTORY_LIMIT = 20;
+const CRON_INTERVAL_MS = 15 * 60_000;
 
 export function database(env: Env): Database {
   if (!env.DB) throw new ConfigurationError("缺少 D1 数据库绑定，请先运行 npm run deploy。");
@@ -22,8 +25,17 @@ export async function publicSettings(db: Database, row?: SettingsRow) {
   if (!settings) throw new HttpError(409, "请先完成首次设置。");
   const state = await db.prepare("SELECT * FROM sync_state WHERE id = 1").first<SyncStateRow>();
   if (!state) throw new ConfigurationError("数据库缺少同步状态，请检查迁移是否完成。");
+  const repositories = parseRepositories(settings.repositories, true);
+  const history = await db.prepare("SELECT report_json FROM sync_history ORDER BY id DESC LIMIT ?")
+    .bind(RUN_HISTORY_LIMIT).all<{ report_json: string }>();
+  const now = Date.now();
+  // 与 */15 Cron 对齐；手动运行不改变 last_scheduled_at。实际执行仍可能受调度延迟和同步锁影响。
+  const nextSyncAt = settings.sync_enabled === 1 && settings.github_token && repositories.length > 0
+    ? new Date(Math.ceil(Math.max(now + 1, state.last_scheduled_at + settings.interval_minutes * 60_000)
+      / CRON_INTERVAL_MS) * CRON_INTERVAL_MS).toISOString()
+    : null;
   return {
-    repositories: parseRepositories(settings.repositories, true),
+    repositories,
     githubTokenConfigured: settings.github_token !== null,
     syncEnabled: settings.sync_enabled === 1,
     intervalMinutes: settings.interval_minutes,
@@ -31,7 +43,10 @@ export async function publicSettings(db: Database, row?: SettingsRow) {
     updatedAt: settings.updated_at,
     maxRepositories: MAX_REPOSITORIES,
     intervals: SYNC_INTERVALS,
-    running: state.lock_until > Date.now(),
+    running: state.lock_until > now,
+    nextSyncAt,
+    historyLimit: RUN_HISTORY_LIMIT,
+    recentRuns: history.results.map((row) => JSON.parse(row.report_json) as SyncReport),
     lastRun: state.report_json ? JSON.parse(state.report_json) : null,
   };
 }

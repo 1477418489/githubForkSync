@@ -70,7 +70,7 @@
           <div id="overview-view" role="tabpanel" aria-labelledby="overview-tab">
             <div class="panel repo-panel">
               <div class="toolbar">
-                <p id="schedule-status">自动同步已暂停</p>
+                <div class="schedule-overview"><p id="schedule-status">自动同步已暂停</p><p id="next-sync" class="schedule-next">下次同步：已暂停</p></div>
                 <div class="actions">
                   <button id="refresh" class="secondary" type="button">刷新</button>
                   <button id="check" class="secondary" type="button">检查配置</button>
@@ -85,7 +85,12 @@
               <p id="run-summary"></p>
               <details><summary>查看本次 JSON 结果</summary><pre id="run-json"></pre></details>
             </section>
-            <p class="history-note">最近一次执行结果保存在数据库中。点击刷新可查看定时任务的结果。</p>
+            <section class="panel run-panel" aria-labelledby="history-title">
+              <div class="run-heading"><h2 id="history-title">最近运行记录</h2><span id="history-count" class="muted"></span></div>
+              <p id="history-empty" class="muted">还没有运行记录。</p>
+              <div id="run-history"></div>
+            </section>
+            <p class="history-note">保留最近 20 条同步和配置检查记录，点击记录可展开仓库结果。刷新可更新记录及预计下次同步时间；实际执行时间可能因调度延迟而变化。</p>
           </div>
 
           <div id="settings-view" role="tabpanel" aria-labelledby="settings-tab" hidden>
@@ -120,7 +125,7 @@
         <section class="notes" aria-label="同步说明">
           <article><span class="note-number">01</span><h3>页面配置</h3><p>添加仓库、修改间隔、暂停任务，都可以在设置页面完成。</p></article>
           <article><span class="note-number">02</span><h3>保留改动</h3><p>通过 GitHub 合并上游更新，冲突时返回错误，由你决定如何处理。</p></article>
-          <article><span class="note-number">03</span><h3>运行有记录</h3><p>查看最近一次同步结果，区分已更新、已是最新和执行失败。</p></article>
+          <article><span class="note-number">03</span><h3>运行有记录</h3><p>查看最近 20 条运行记录和预计下次同步时间，追踪每个仓库的执行结果。</p></article>
         </section>
       </main>
       <footer class="footer"><span>Fork Sync</span><span>GitHub upstream → your fork</span></footer>

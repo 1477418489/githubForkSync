@@ -1,7 +1,7 @@
 import { parseRepositories } from "./config.ts";
 import { decryptToken, requireEncryptionKey } from "./crypto.ts";
 import { HttpError } from "./http.ts";
-import { database, readSettings } from "./storage.ts";
+import { database, readSettings, RUN_HISTORY_LIMIT } from "./storage.ts";
 import { logReport, runSync } from "./sync.ts";
 import type { Env, SyncReport } from "./types.ts";
 
@@ -32,8 +32,15 @@ export async function executeSync(env: Env, trigger: SyncReport["trigger"], dryR
   try {
     const report = await runSync({ githubToken, repositories }, trigger, dryRun);
     logReport(report);
-    await db.prepare("UPDATE sync_state SET report_json = ?, lock_id = NULL, lock_until = 0 WHERE id = 1 AND lock_id = ?")
-      .bind(JSON.stringify(report), lease).run();
+    const reportJson = JSON.stringify(report);
+    await db.batch([
+      db.prepare(`INSERT INTO sync_history(run_id, report_json)
+        SELECT ?, ? FROM sync_state WHERE id = 1 AND lock_id = ?`).bind(report.runId, reportJson, lease),
+      db.prepare(`DELETE FROM sync_history WHERE id NOT IN
+        (SELECT id FROM sync_history ORDER BY id DESC LIMIT ?)`).bind(RUN_HISTORY_LIMIT),
+      db.prepare("UPDATE sync_state SET report_json = ?, lock_id = NULL, lock_until = 0 WHERE id = 1 AND lock_id = ?")
+        .bind(reportJson, lease),
+    ]);
     return report;
   } finally {
     await db.prepare("UPDATE sync_state SET lock_id = NULL, lock_until = 0 WHERE id = 1 AND lock_id = ?").bind(lease).run();
