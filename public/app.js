@@ -1,9 +1,11 @@
 const byId = (id) => document.getElementById(id);
 const statusLabels = { pending: "待运行", synced: "已更新", up_to_date: "已是最新", checked: "检查通过", failed: "失败", skipped: "已跳过" };
+const modeLabels = { merge: "合并", force: "强制对齐" };
 let busy = false;
 let config = null;
 let formRevision = null;
 let rowNumber = 0;
+let selectedRepositories = null;
 
 function notice(message, error = false) {
   const element = byId("notice");
@@ -18,7 +20,26 @@ function setBusy(value) {
   byId("github-token").disabled = value || byId("clear-token").checked;
   byId("add-repository").disabled = value || byId("repository-editor").children.length >= 20;
   for (const id of ["check", "sync"]) byId(id).disabled = value || !config?.githubTokenConfigured || !config?.repositories.length || Boolean(config?.running);
+  updateSelection();
   byId("workspace").setAttribute("aria-busy", String(value));
+}
+
+function updateSelection() {
+  const count = selectedRepositories?.size ?? 0;
+  const total = config?.repositories.length ?? 0;
+  byId("select-all").checked = total > 0 && count === total;
+  byId("select-all").indeterminate = count > 0 && count < total;
+  byId("select-all").disabled = busy || total === 0;
+  byId("selection-count").textContent = "已选 " + count + " / " + total;
+  byId("sync-selected").disabled = busy || !config?.githubTokenConfigured || Boolean(config?.running) || count === 0;
+}
+
+function updateModeNote() {
+  const force = byId("sync-mode").value === "force";
+  byId("sync-mode-note").textContent = force
+    ? "强制同步会丢弃目标分支的独有提交，并对齐上游同名分支。每轮最多强制同步 10 个仓库，请按需分批勾选。"
+    : "本次策略仅影响手动运行；定时任务使用设置中保存的仓库策略。";
+  byId("sync-mode-note").classList.toggle("force-warning", force);
 }
 
 function showScreen(id) {
@@ -35,6 +56,9 @@ function showTab(tab) {
 function clearPrivateState() {
   config = null;
   formRevision = null;
+  selectedRepositories = null;
+  byId("sync-mode").value = "configured";
+  updateModeNote();
   for (const form of document.querySelectorAll("form")) form.reset();
   byId("repositories").replaceChildren();
   byId("repository-editor").replaceChildren();
@@ -80,6 +104,9 @@ function intervalLabel(minutes) {
 }
 
 function renderRepositories(repositories, report = null) {
+  const names = new Set(repositories.map((target) => target.repository.toLowerCase()));
+  selectedRepositories = new Set(selectedRepositories === null ? names : [...selectedRepositories].filter((name) => names.has(name)));
+  const results = [report, ...(config?.recentRuns ?? [])].filter(Boolean).flatMap((run) => run.results);
   const list = byId("repositories");
   list.replaceChildren();
   byId("repo-count").textContent = String(repositories.length);
@@ -91,13 +118,24 @@ function renderRepositories(repositories, report = null) {
     return;
   }
   for (const target of repositories) {
-    const previous = report?.results.find((result) => result.repository.toLowerCase() === target.repository.toLowerCase() && (!target.branch || result.branch === target.branch));
+    const previous = results.find((result) => result.repository.toLowerCase() === target.repository.toLowerCase() && (!target.branch || result.branch === target.branch));
     const repository = previous || target;
     const row = byId("repository-template").content.cloneNode(true);
+    const checkbox = row.querySelector(".select-repository");
+    const key = target.repository.toLowerCase();
+    checkbox.checked = selectedRepositories.has(key);
+    checkbox.disabled = busy;
+    checkbox.setAttribute("aria-label", "选择 " + target.repository);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedRepositories.add(key);
+      else selectedRepositories.delete(key);
+      updateSelection();
+    });
     const link = row.querySelector(".repo-link");
     link.textContent = target.repository;
     link.href = "https://github.com/" + target.repository.split("/").map(encodeURIComponent).join("/");
     row.querySelector(".branch").textContent = repository.branch || "默认分支";
+    row.querySelector(".sync-mode-label").textContent = "保存策略：" + modeLabels[target.syncMode || "merge"];
     if (repository.upstream) row.querySelector(".upstream").textContent = "上游 " + repository.upstream;
     const status = Object.hasOwn(statusLabels, repository.status) ? repository.status : "pending";
     const badge = row.querySelector(".badge");
@@ -105,7 +143,7 @@ function renderRepositories(repositories, report = null) {
     badge.dataset.status = status;
     if (repository.message) {
       const message = row.querySelector(".repo-message");
-      message.textContent = repository.message;
+      message.textContent = "最近运行（" + modeLabels[repository.syncMode || "merge"] + "策略）：" + repository.message;
       message.hidden = false;
     }
     list.append(row);
@@ -156,6 +194,7 @@ function renderHistory(reports, limit) {
     for (const result of report.results) {
       const item = document.createElement("li");
       item.textContent = result.repository + (result.branch ? "（" + result.branch + "）" : "")
+        + " · " + modeLabels[result.syncMode || "merge"]
         + " · " + (statusLabels[result.status] || result.status) + "：" + result.message;
       results.append(item);
     }
@@ -168,12 +207,17 @@ function addRepository(target = {}) {
   if (byId("repository-editor").children.length >= 20) return;
   const row = byId("editor-template").content.cloneNode(true);
   const number = ++rowNumber;
-  for (const field of ["repository", "branch"]) {
+  const labels = { repository: ".editor-repo-label", branch: ".editor-branch-label", syncMode: ".editor-mode-label" };
+  for (const field of ["repository", "branch", "syncMode"]) {
     const input = row.querySelector('[data-field="' + field + '"]');
     input.id = "editor-" + field + "-" + number;
-    input.value = target[field] || "";
-    row.querySelector(field === "repository" ? ".editor-repo-label" : ".editor-branch-label").htmlFor = input.id;
+    input.value = target[field] || (field === "syncMode" ? "merge" : "");
+    row.querySelector(labels[field]).htmlFor = input.id;
   }
+  row.querySelector(".force-note").hidden = target.syncMode !== "force";
+  row.querySelector('[data-field="syncMode"]').addEventListener("change", (event) => {
+    event.target.closest(".editor-row").querySelector(".force-note").hidden = event.target.value !== "force";
+  });
   row.querySelector(".remove-repository").addEventListener("click", (event) => {
     event.currentTarget.closest(".editor-row").remove();
     setBusy(busy);
@@ -270,7 +314,8 @@ byId("settings-form").addEventListener("submit", async (event) => {
   const repositories = Array.from(byId("repository-editor").children, (row) => {
     const repository = row.querySelector('[data-field="repository"]').value.trim();
     const branch = row.querySelector('[data-field="branch"]').value;
-    return { repository, ...(branch ? { branch } : {}) };
+    const syncMode = row.querySelector('[data-field="syncMode"]').value;
+    return { repository, ...(branch ? { branch } : {}), ...(syncMode === "force" ? { syncMode } : {}) };
   });
   const token = byId("github-token").value.trim();
   const body = {
@@ -280,6 +325,12 @@ byId("settings-form").addEventListener("submit", async (event) => {
     ...(byId("clear-token").checked ? { githubToken: null } : token ? { githubToken: token } : {}),
     ...(password ? { password } : {}),
   };
+  const newForceTargets = repositories.filter((target) => target.syncMode === "force" && (
+    (!config.syncEnabled && body.syncEnabled) || !config.repositories.some((previous) =>
+      previous.repository.toLowerCase() === target.repository.toLowerCase() && previous.branch === target.branch && previous.syncMode === "force")
+  ));
+  if (newForceTargets.length && !confirm("以下仓库将保存强制同步策略，启用自动同步后会持续覆盖目标分支并丢弃独有提交：\n\n"
+    + newForceTargets.map((target) => target.repository + "（" + (target.branch || "默认分支") + "）").join("\n") + "\n\n确认保存？")) return;
   setBusy(true);
   notice("正在保存设置…");
   try {
@@ -296,16 +347,31 @@ byId("settings-form").addEventListener("submit", async (event) => {
   finally { setBusy(false); }
 });
 
-async function run(dryRun) {
-  if (busy) return;
+async function run(dryRun, selectedOnly = false) {
+  if (busy || !config) return;
+  const targets = config.repositories.filter((target) => !selectedOnly || selectedRepositories.has(target.repository.toLowerCase()));
+  if (!targets.length) { notice("请先勾选需要同步的仓库。", true); return; }
+  const syncMode = byId("sync-mode").value;
+  const forceTargets = targets.filter((target) => (syncMode === "configured" ? target.syncMode : syncMode) === "force");
+  if (!dryRun && forceTargets.length && !confirm("以下分支将强制对齐上游同名分支，独有提交会被丢弃：\n\n"
+    + forceTargets.map((target) => target.repository + "（" + (target.branch || "默认分支") + "）").join("\n") + "\n\n确认强制同步？")) return;
   setBusy(true);
   notice(dryRun ? "正在检查 Fork 配置，此操作不会写入仓库…" : "正在逐个同步仓库，请保持页面打开…");
   try {
-    const report = await api("/api/sync", { method: "POST", body: { dryRun } });
-    await loadConfig(false);
+    const report = await api("/api/sync", { method: "POST", body: {
+      dryRun, repositories: targets.map((target) => target.repository), revision: config.revision,
+      ...(syncMode === "configured" ? {} : { syncMode }),
+    } });
     renderReport(report);
     renderRepositories(config.repositories, report);
-    notice(report.ok ? dryRun ? "仓库检查通过。此检查不验证写权限、目标分支或合并冲突。" : "本轮同步完成。" : "本轮存在失败或跳过的仓库，请查看结果。", !report.ok);
+    let refreshError = "";
+    try { await loadConfig(false); }
+    catch (error) { refreshError = " 运行已返回结果，但刷新记录失败：" + error.message; }
+    if (!config) return;
+    renderReport(report);
+    renderRepositories(config.repositories, report);
+    const message = report.ok ? dryRun ? "仓库检查通过。此检查不验证写权限、目标分支或合并冲突。" : "本轮同步完成。" : "本轮存在失败或跳过的仓库，请查看结果。";
+    notice(message + refreshError, !report.ok || Boolean(refreshError));
   } catch (error) {
     notice(error.message + (dryRun ? "" : " 若已提交同步请求，请检查运行记录或 GitHub 仓库确认结果。"), true);
   } finally { setBusy(false); }
@@ -339,6 +405,13 @@ byId("overview-tab").addEventListener("click", () => showTab("overview"));
 byId("settings-tab").addEventListener("click", () => showTab("settings"));
 byId("check").addEventListener("click", () => run(true));
 byId("sync").addEventListener("click", () => run(false));
+byId("sync-selected").addEventListener("click", () => run(false, true));
+byId("select-all").addEventListener("change", (event) => {
+  selectedRepositories = new Set(event.target.checked ? config.repositories.map((target) => target.repository.toLowerCase()) : []);
+  for (const checkbox of byId("repositories").querySelectorAll(".select-repository")) checkbox.checked = event.target.checked;
+  updateSelection();
+});
+byId("sync-mode").addEventListener("change", updateModeNote);
 byId("refresh").addEventListener("click", refresh);
 byId("reload-settings").addEventListener("click", refresh);
 byId("retry").addEventListener("click", boot);

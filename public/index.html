@@ -23,7 +23,7 @@
         <section class="intro">
           <p class="eyebrow">KEEP YOUR FORKS IN SYNC</p>
           <h1>让 Fork 跟上上游。</h1>
-          <p class="lead">在这里设置仓库和同步间隔，自动获取上游更新。<br />保留你的提交，遇到合并冲突时停止该仓库的同步。</p>
+          <p class="lead">在这里设置仓库和同步间隔，自动获取上游更新。<br />默认保留你的提交，也可按仓库选择强制对齐上游。</p>
         </section>
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
         <section id="loading" class="panel loading-panel">
@@ -77,6 +77,13 @@
                   <button id="sync" type="button">同步全部 <span aria-hidden="true">↗</span></button>
                 </div>
               </div>
+              <div class="sync-options">
+                <label class="checkbox-label"><input id="select-all" type="checkbox" />全选</label>
+                <span id="selection-count" class="muted">已选 0 / 0</span>
+                <div class="sync-mode-control"><label for="sync-mode">本次同步策略</label><select id="sync-mode" aria-describedby="sync-mode-note"><option value="configured">使用各仓库设置</option><option value="merge">合并 · 保留自有提交</option><option value="force">强制 · 对齐上游</option></select></div>
+                <button id="sync-selected" class="secondary" type="button">同步所选</button>
+              </div>
+              <p id="sync-mode-note" class="sync-mode-note">本次策略仅影响手动运行；定时任务使用设置中保存的仓库策略。</p>
               <ul id="repositories" class="repositories"></ul>
               <div class="panel-footer"><span class="dot"></span><p>启用自动同步后，关闭页面仍会按设定的间隔执行。</p></div>
             </div>
@@ -105,6 +112,7 @@
               <div class="setting-block">
                 <div class="section-heading"><div><h3>同步仓库</h3><p class="muted">填写 Fork 的 owner/repo；分支留空时同步默认分支，最多 20 个仓库。</p></div><button id="add-repository" class="secondary" type="button">添加仓库</button></div>
                 <div id="repository-editor" class="repository-editor"></div>
+                <p class="field-note">保存的策略用于定时任务，也用于选择「使用各仓库设置」的手动同步。合并保留自有提交，遇到冲突停止；强制同步会覆盖目标分支。</p>
               </div>
               <div class="setting-block schedule-settings">
                 <div><label class="checkbox-label"><input id="sync-enabled" type="checkbox" />启用自动同步</label><p class="field-note">暂停自动任务后，仍可以手动同步。</p></div>
@@ -124,21 +132,27 @@
         </section>
         <section class="notes" aria-label="同步说明">
           <article><span class="note-number">01</span><h3>页面配置</h3><p>添加仓库、修改间隔、暂停任务，都可以在设置页面完成。</p></article>
-          <article><span class="note-number">02</span><h3>保留改动</h3><p>通过 GitHub 合并上游更新，冲突时返回错误，由你决定如何处理。</p></article>
+          <article><span class="note-number">02</span><h3>选择策略</h3><p>默认合并并保留改动。确认不需要自有提交时，可勾选仓库并强制对齐上游。</p></article>
           <article><span class="note-number">03</span><h3>运行有记录</h3><p>查看最近 20 条运行记录和预计下次同步时间，追踪每个仓库的执行结果。</p></article>
         </section>
       </main>
       <footer class="footer"><span>Fork Sync</span><span>GitHub upstream → your fork</span></footer>
     </div>
     <template id="repository-template">
-      <li class="repository"><div class="repo-main">
+      <li class="repository"><label class="checkbox-label repo-selector"><input class="select-repository" type="checkbox" /></label><div class="repo-main">
         <div class="repo-top"><a class="repo-link" target="_blank" rel="noopener noreferrer"></a><span class="badge" data-status="pending">待运行</span></div>
-        <p class="repo-meta"><span class="upstream">上游信息将在检查或同步后显示</span><span class="branch-label">分支 <code class="branch"></code></span></p>
+        <p class="repo-meta"><span class="upstream">上游信息将在检查或同步后显示</span><span class="branch-label">分支 <code class="branch"></code></span><span class="sync-mode-label"></span></p>
         <p class="repo-message" hidden></p>
       </div></li>
     </template>
     <template id="editor-template">
-      <div class="editor-row"><div><label class="editor-repo-label">仓库</label><input data-field="repository" placeholder="your-name/your-fork" maxlength="140" spellcheck="false" required /></div><div><label class="editor-branch-label">分支</label><input data-field="branch" placeholder="默认分支" maxlength="255" spellcheck="false" /></div><button class="remove-repository secondary" type="button" aria-label="移除仓库">移除</button></div>
+      <div class="editor-row">
+        <div class="editor-repository"><label class="editor-repo-label">仓库</label><input data-field="repository" placeholder="your-name/your-fork" maxlength="140" spellcheck="false" required /></div>
+        <div><label class="editor-branch-label">分支</label><input data-field="branch" placeholder="默认分支" maxlength="255" spellcheck="false" /></div>
+        <div><label class="editor-mode-label">同步策略</label><select data-field="syncMode"><option value="merge">合并 · 保留提交</option><option value="force">强制 · 对齐上游</option></select></div>
+        <button class="remove-repository secondary" type="button" aria-label="移除仓库">移除</button>
+        <p class="force-note" hidden>强制同步会丢弃目标分支的独有提交，并对齐上游同名分支；启用自动同步后也会按此策略覆盖。上游同名分支必须存在。</p>
+      </div>
     </template>
   </body>
 </html>

@@ -1,3 +1,5 @@
+import { isValidBranch } from "./config.ts";
+
 const API_BASE = "https://api.github.com";
 const API_VERSION = "2026-03-10";
 export const GITHUB_TIMEOUT_MS = 10_000;
@@ -49,7 +51,7 @@ export class GitHubClient {
     this.token = token;
   }
 
-  private async request(path: string, body?: object): Promise<unknown> {
+  private async request(path: string, body?: object, method = body ? "POST" : "GET"): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), GITHUB_TIMEOUT_MS);
     try {
@@ -61,7 +63,7 @@ export class GitHubClient {
       };
       if (body) headers["Content-Type"] = "application/json";
       const response = await fetch(`${API_BASE}${path}`, {
-        method: body ? "POST" : "GET",
+        method,
         headers,
         ...(body ? { body: JSON.stringify(body) } : {}),
         redirect: "manual",
@@ -126,8 +128,10 @@ export class GitHubClient {
     if (
       !isObject(data) || typeof data.fork !== "boolean" ||
       typeof data.archived !== "boolean" || typeof data.disabled !== "boolean" ||
-      typeof data.default_branch !== "string" || !data.default_branch ||
-      (data.fork && (!isObject(data.parent) || typeof data.parent.full_name !== "string"))
+      !isValidBranch(data.default_branch) ||
+      (data.fork && (!isObject(data.parent) || typeof data.parent.full_name !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9._-]{1,100}$/.test(data.parent.full_name) ||
+        [".", ".."].includes(data.parent.full_name.split("/")[1] ?? "")))
     ) {
       throw new GitHubError("GitHub 仓库信息缺少必要字段。", "invalid_response");
     }
@@ -144,5 +148,32 @@ export class GitHubClient {
       throw new GitHubError("GitHub 同步响应格式异常，请检查仓库是否已更新。", "invalid_response");
     }
     return data as unknown as MergeResponse;
+  }
+
+  private refSha(data: unknown, branch: string): string {
+    if (!isObject(data) || data.ref !== `refs/heads/${branch}` || !isObject(data.object) ||
+      data.object.type !== "commit" || typeof data.object.sha !== "string" || !/^[a-f0-9]{40}$/.test(data.object.sha)) {
+      throw new GitHubError("GitHub 分支响应格式异常，请检查仓库是否已更新。", "invalid_response");
+    }
+    return data.object.sha;
+  }
+
+  async getBranchSha(repository: string, branch: string): Promise<string> {
+    try {
+      const data = await this.request(`${this.repositoryPath(repository)}/git/ref/heads/${encodeURIComponent(branch)}`);
+      return this.refSha(data, branch);
+    } catch (error) {
+      if (error instanceof GitHubError && error.status === 404) {
+        throw new GitHubError(`无法读取 ${repository} 的 ${branch} 分支：分支不存在或 Token 无权访问。强制同步要求上游与 Fork 均存在同名分支。`, error.code, error.status);
+      }
+      throw error;
+    }
+  }
+
+  async forceUpdateBranch(repository: string, branch: string, sha: string): Promise<void> {
+    const data = await this.request(`${this.repositoryPath(repository)}/git/refs/heads/${encodeURIComponent(branch)}`, { sha, force: true }, "PATCH");
+    if (this.refSha(data, branch) !== sha) {
+      throw new GitHubError("GitHub 返回的分支提交与请求不一致，请检查仓库是否已更新。", "verification_failed");
+    }
   }
 }

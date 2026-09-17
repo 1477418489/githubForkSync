@@ -1,4 +1,4 @@
-import { ConfigurationError, MAX_REPOSITORIES, parseRepositories, SYNC_INTERVALS, validateGitHubToken, validatePassword } from "./config.ts";
+import { ConfigurationError, MAX_REPOSITORIES, parseRepositories, SYNC_INTERVALS, validateGitHubToken, validatePassword, validateSyncBudget } from "./config.ts";
 import { encryptToken, hashPassword, requireEncryptionKey } from "./crypto.ts";
 import { allowFields, HttpError } from "./http.ts";
 import type { Database, Env, SettingsRow, SyncReport, SyncStateRow } from "./types.ts";
@@ -66,6 +66,7 @@ export async function saveSettings(db: Database, env: Env, body: Record<string, 
   let password: string | undefined;
   try {
     repositories = parseRepositories(body.repositories, !body.syncEnabled);
+    if (body.syncEnabled) validateSyncBudget(repositories);
     if (body.githubToken === null) newToken = null;
     else if (body.githubToken !== undefined && body.githubToken !== "") newToken = validateGitHubToken(body.githubToken);
     if (body.password !== undefined) password = validatePassword(body.password);

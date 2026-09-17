@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConfigurationError, validatePassword, validateGitHubToken, parseRepositories } from "../src/config.ts";
+import { ConfigurationError, validatePassword, validateGitHubToken, parseRepositories, parseSyncOptions, validateSyncBudget } from "../src/config.ts";
 import { GITHUB_TOKEN, PASSWORD } from "./helpers.mjs";
 
 describe("repository configuration", () => {
@@ -43,6 +43,44 @@ describe("repository configuration", () => {
   it("permits an empty repository list only when explicitly allowed", () => {
     assert.deepEqual(parseRepositories([], true), []);
     assert.throws(() => parseRepositories([]), ConfigurationError);
+  });
+
+  it("preserves explicit strategies and keeps older configurations valid", () => {
+    const targets = [{ repository: "alice/project", syncMode: "merge" }, { repository: "alice/another", syncMode: "force" }];
+    assert.deepEqual(parseRepositories(JSON.stringify(targets)), targets);
+    assert.deepEqual(parseRepositories([{ repository: "alice/project" }]), [{ repository: "alice/project" }]);
+    for (const syncMode of [null, true, "reset", "FORCE", ""]) {
+      assert.throws(() => parseRepositories([{ repository: "alice/project", syncMode }]), /syncMode/);
+    }
+  });
+
+  it("rejects branch names that could address another ref or normalize a request path", () => {
+    for (const branch of ["../main", "feature/../main", "/main", "main/", "main//test", ".hidden", "main.lock", "main.", "a..b", "main@{1}", "a:b", "a?b", "a*b", "a[b", "a\\b", "-main"]) {
+      assert.throws(() => parseRepositories([{ repository: "alice/project", branch, syncMode: "force" }]), /branch/, branch);
+    }
+    assert.equal(parseRepositories([{ repository: "alice/project", branch: "feature/中文#1" }])[0].branch, "feature/中文#1");
+  });
+
+  it("accepts optional selections and rejects malformed sync options before running", () => {
+    assert.deepEqual(parseSyncOptions({}), {});
+    assert.deepEqual(parseSyncOptions({ dryRun: true, repositories: [" alice/project "], syncMode: "force", revision: 2 }),
+      { dryRun: true, repositories: ["alice/project"], syncMode: "force", revision: 2 });
+    for (const options of [
+      { repositories: [] }, { repositories: "alice/project" }, { repositories: [null] },
+      { repositories: [{ repository: "alice/project" }] }, { repositories: ["alice/project", "ALICE/PROJECT"] },
+      { syncMode: null }, { syncMode: "reset" }, { force: true }, { dryRun: "true" },
+      { revision: "1" }, { revision: 0 }, { revision: 1.5 },
+    ]) assert.throws(() => parseSyncOptions(options), ConfigurationError, JSON.stringify(options));
+  });
+
+  it("accounts for force verification requests without reducing the old 20-fork merge limit", () => {
+    const targets = Array.from({ length: 20 }, (_, index) => ({ repository: "alice/repo" + index }));
+    assert.doesNotThrow(() => validateSyncBudget(targets));
+    const forceTargets = targets.map((target) => ({ ...target, syncMode: "force" }));
+    assert.doesNotThrow(() => validateSyncBudget(forceTargets.slice(0, 10)));
+    assert.throws(() => validateSyncBudget(forceTargets.slice(0, 11)), /55.*50/);
+    assert.doesNotThrow(() => validateSyncBudget([...forceTargets.slice(0, 6), ...targets.slice(6, 16)]));
+    assert.throws(() => validateSyncBudget([...forceTargets.slice(0, 6), ...targets.slice(6, 17)]), /52.*50/);
   });
 
   it("validates GitHub tokens and admin passwords", () => {

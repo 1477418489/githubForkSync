@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { runSync } from "../src/sync.ts";
 import { GITHUB_TIMEOUT_MS } from "../src/github.ts";
-import { configuration, GITHUB_TOKEN, merged, repository, stubGitHub } from "./helpers.mjs";
+import { branchRef, configuration, GITHUB_TOKEN, merged, repository, stubGitHub } from "./helpers.mjs";
 
 const twoRepos = [{ repository: "alice/project" }, { repository: "alice/another" }];
 
@@ -164,5 +164,127 @@ describe("GitHub fork synchronization", () => {
     const report = await pending;
     assert.equal(report.results[0].code, "timeout");
     assert.equal(report.ok, false);
+  });
+
+  it("explains the reported merge conflict without falling back to a destructive write", async (t) => {
+    const fetch = stubGitHub(t, [repository(), Response.json({ message: "There are merge conflicts" }, { status: 409 })]);
+    const report = await runSync(configuration(), "manual");
+    assert.equal(report.ok, false);
+    assert.equal(report.summary.failed, 1);
+    assert.equal(report.summary.synced, 0);
+    assert.equal(report.results[0].syncMode, "merge");
+    assert.match(report.results[0].message, /合并冲突.*未合入.*强制同步.*There are merge conflicts/);
+    assert.equal(fetch.mock.callCount(), 2);
+    assert.ok(fetch.mock.calls.every(({ arguments: [, init] }) => init.method !== "PATCH"));
+  });
+});
+
+describe("explicit force synchronization", () => {
+  const previousSha = "a".repeat(40);
+  const upstreamSha = "b".repeat(40);
+  const forceConfig = (overrides = {}) => configuration({ repositories: [{ repository: "alice/project", syncMode: "force", ...overrides }] });
+
+  it("updates only the fork ref to the upstream SHA and reads it back before reporting success", async (t) => {
+    const fetch = stubGitHub(t, [repository(), branchRef(upstreamSha), branchRef(previousSha), branchRef(upstreamSha), branchRef(upstreamSha)]);
+    const report = await runSync(forceConfig(), "manual");
+    assert.equal(report.ok, true);
+    assert.equal(report.results[0].status, "synced");
+    assert.equal(report.results[0].syncMode, "force");
+    assert.equal(report.results[0].previousSha, previousSha);
+    assert.equal(report.results[0].upstreamSha, upstreamSha);
+    assert.equal(report.results[0].syncedSha, upstreamSha);
+    assert.deepEqual(fetch.mock.calls.map(({ arguments: [url, init] }) => [init.method, url]), [
+      ["GET", "https://api.github.com/repos/alice/project"],
+      ["GET", "https://api.github.com/repos/upstream/project/git/ref/heads/main"],
+      ["GET", "https://api.github.com/repos/alice/project/git/ref/heads/main"],
+      ["PATCH", "https://api.github.com/repos/alice/project/git/refs/heads/main"],
+      ["GET", "https://api.github.com/repos/alice/project/git/ref/heads/main"],
+    ]);
+    assert.deepEqual(JSON.parse(fetch.mock.calls[3].arguments[1].body), { sha: upstreamSha, force: true });
+    assert.equal(fetch.mock.calls[3].arguments[1].redirect, "manual");
+    assert.equal(fetch.mock.calls[3].arguments[1].headers.Authorization, `Bearer ${GITHUB_TOKEN}`);
+  });
+
+  it("does not send a write when both branch tips already match", async (t) => {
+    const fetch = stubGitHub(t, [repository(), branchRef(), branchRef()]);
+    const report = await runSync(forceConfig(), "manual");
+    assert.equal(report.results[0].status, "up_to_date");
+    assert.equal(report.summary.synced, 0);
+    assert.equal(fetch.mock.callCount(), 3);
+    assert.ok(fetch.mock.calls.every(({ arguments: [, init] }) => init.method === "GET"));
+  });
+
+  it("encodes the configured branch and requires the exact ref in responses", async (t) => {
+    const branch = "feature/中文#1";
+    const fetch = stubGitHub(t, [repository(), branchRef(upstreamSha, branch), branchRef(previousSha, branch), branchRef(upstreamSha, branch), branchRef(upstreamSha, branch)]);
+    assert.equal((await runSync(forceConfig({ branch }), "manual")).ok, true);
+    for (const call of fetch.mock.calls.slice(1)) assert.ok(call.arguments[0].endsWith("/heads/" + encodeURIComponent(branch)));
+  });
+
+  it("checks force configurations without resolving or writing refs", async (t) => {
+    const fetch = stubGitHub(t, [repository()]);
+    const report = await runSync(forceConfig(), "manual", true);
+    assert.equal(report.results[0].status, "checked");
+    assert.equal(report.results[0].syncMode, "force");
+    assert.equal(fetch.mock.callCount(), 1);
+  });
+
+  for (const missing of ["upstream", "fork"]) {
+    it(`does not create a branch or write when the ${missing} branch cannot be read`, async (t) => {
+      const fetch = stubGitHub(t, [repository(), ...(missing === "fork" ? [branchRef()] : []), Response.json({ message: "Not Found" }, { status: 404 })]);
+      const report = await runSync(forceConfig(), "manual");
+      assert.equal(report.results[0].code, "not_found");
+      assert.match(report.results[0].message, /同名分支/);
+      assert.ok(fetch.mock.calls.every(({ arguments: [, init] }) => init.method === "GET"));
+    });
+  }
+
+  for (const badRef of [branchRef("bad-sha"), branchRef(upstreamSha, "other"), { ref: "refs/heads/main", object: { type: "tag", sha: upstreamSha } }]) {
+    it("refuses to write using invalid branch metadata", async (t) => {
+      const fetch = stubGitHub(t, [repository(), badRef]);
+      const report = await runSync(forceConfig(), "manual");
+      assert.equal(report.results[0].code, "invalid_response");
+      assert.equal(fetch.mock.callCount(), 2);
+    });
+  }
+
+  it("does not claim success when GitHub acknowledges the write but the branch still differs", async (t) => {
+    const fetch = stubGitHub(t, [repository(), branchRef(upstreamSha), branchRef(previousSha), branchRef(upstreamSha), branchRef(previousSha)]);
+    const report = await runSync(forceConfig(), "manual");
+    assert.equal(report.ok, false);
+    assert.equal(report.results[0].status, "failed");
+    assert.equal(report.results[0].code, "verification_failed");
+    assert.equal(report.results[0].syncedSha, previousSha);
+    assert.equal(fetch.mock.callCount(), 5);
+  });
+
+  it("rejects a write response for a different SHA", async (t) => {
+    const fetch = stubGitHub(t, [repository(), branchRef(upstreamSha), branchRef(previousSha), branchRef(previousSha)]);
+    const report = await runSync(forceConfig(), "manual");
+    assert.equal(report.results[0].code, "verification_failed");
+    assert.equal(fetch.mock.callCount(), 4);
+  });
+
+  it("keeps a failed verification read as a failure without repeating the write", async (t) => {
+    const fetch = stubGitHub(t, [repository(), branchRef(upstreamSha), branchRef(previousSha), branchRef(upstreamSha), new Error("Connection interrupted")]);
+    const report = await runSync(forceConfig(), "manual");
+    assert.equal(report.results[0].status, "failed");
+    assert.equal(report.results[0].code, "network_error");
+    assert.equal(fetch.mock.calls.filter(({ arguments: [, init] }) => init.method === "PATCH").length, 1);
+  });
+
+  it("respects branch protection and continues with another repository", async (t) => {
+    const fetch = stubGitHub(t, [repository(), branchRef(upstreamSha), branchRef(previousSha), Response.json({ message: "Protected branch update failed" }, { status: 422 }), repository(), merged()]);
+    const report = await runSync(configuration({ repositories: [{ repository: "alice/project", syncMode: "force" }, { repository: "alice/another" }] }), "manual");
+    assert.equal(report.results[0].code, "validation_failed");
+    assert.equal(report.results[1].status, "synced");
+    assert.equal(fetch.mock.callCount(), 6);
+  });
+
+  it("rejects an oversized force batch before any GitHub request", async (t) => {
+    const fetch = stubGitHub(t, []);
+    const repositories = Array.from({ length: 11 }, (_, index) => ({ repository: "alice/repo" + index, syncMode: "force" }));
+    await assert.rejects(runSync(configuration({ repositories }), "manual"), /超过单轮/);
+    assert.equal(fetch.mock.callCount(), 0);
   });
 });

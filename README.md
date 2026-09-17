@@ -3,8 +3,8 @@
 部署在 **Cloudflare Workers + D1** 上的 GitHub Fork 自动同步工具。部署时创建数据库并执行迁移，之后通过中文页面管理 Token、仓库、同步间隔和管理密码。
 
 - 支持 1–20 个 Fork，每个仓库同步默认分支或指定的一个分支。
-- 使用 GitHub 官方 `merge-upstream` API，保留 Fork 自有提交；遇到冲突停止该仓库的同步，不强制推送。
-- 页面支持配置检查、手动同步、暂停自动同步，保留最近 20 条运行记录并显示预计下次自动同步时间。
+- 默认使用 GitHub 官方 `merge-upstream` API，保留 Fork 自有提交，遇到冲突停止；可显式选择强制对齐上游，并在写入后核验目标分支。
+- 页面支持勾选仓库同步、临时切换同步策略、配置检查和暂停自动同步，保留最近 20 条运行记录并显示预计下次自动同步时间。
 - 配置、登录会话和运行结果保存在 D1；GitHub Token 加密保存，读取配置时不会回显。
 - TypeScript + Workers 原生 API，前端为 HTML/CSS/JavaScript，无运行时 npm 依赖。
 
@@ -89,7 +89,7 @@ npm run deploy
 
 1. 打开终端给出的 Worker 地址，输入首次设置码，创建 **12–128 个字符的管理密码**。
 2. 创建 [GitHub Fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)：Resource owner 选择 Fork 所属账号，Repository access 选择需要同步的 Fork，开启 **Contents → Read and write**。需要更新工作流文件时，还需授予 **Workflows → Read and write**；更多说明见 [GitHub Token 和仓库设置](#github-token-和仓库设置)。
-3. 在应用「设置」页面填写 GitHub Token 和 Fork 自身的 `owner/repo`，例如 `your-name/your-fork`。分支留空表示使用默认分支；指定分支时，该分支必须已经存在。
+3. 在应用「设置」页面填写 GitHub Token 和 Fork 自身的 `owner/repo`，例如 `your-name/your-fork`。分支留空表示使用默认分支；指定分支时，该分支必须已经存在。每个仓库默认使用「合并 · 保留提交」；选择强制策略会丢弃目标分支的独有提交，保存后也会影响定时任务。
 4. 选择同步间隔，勾选「启用自动同步」并保存。首次创建管理员后默认没有 Token 或仓库，自动同步处于暂停状态。
 5. 点击「检查配置」，再点击「同步全部」验证实际同步。配置检查只读取仓库信息，不验证写权限、目标分支存在性或合并冲突。
 
@@ -186,9 +186,27 @@ GitHub PAT、管理密码和应用密钥不会写入源码、`wrangler.jsonc`、
 
 页面填写 **Fork 自身的 `owner/repo`**，例如 `your-name/your-fork`，不填上游地址或完整 URL。留空分支使用 Fork 的默认分支；显式分支必须已经存在。每个仓库只能出现一次。
 
-上游由 GitHub Fork 关系确定，合入的上游分支由 `merge-upstream` API 决定。不提供任意上游分支映射、所有分支/标签同步或自动发现全部 Fork。
+上游由 GitHub Fork 关系确定。合并模式的上游分支由 `merge-upstream` API 决定；强制模式读取上游的**同名分支**，例如 Fork 的 `release` 对齐上游的 `release`。上游和 Fork 都必须存在该分支，缺失时直接失败，不自动换用其他分支或创建分支。不提供任意上游分支映射、所有分支/标签同步或自动发现全部 Fork。
+
+强制模式需要 Token 能读取上游分支，并写入 Fork 分支。私有上游没有读取权限时可能返回 404；分支保护、仓库规则和工作流权限仍由 GitHub 检查。
 
 「检查配置」只读取 GitHub 仓库信息，确认其可访问、是 Fork、未归档且未禁用；**不验证写权限、目标分支存在性或合并冲突**。这些由真正同步时的 GitHub 响应确认。
+
+## 同步选项与合并冲突
+
+| 策略 | 行为 | 适用情况 |
+| --- | --- | --- |
+| 合并 · 保留提交（默认） | 合入上游更新并保留 Fork 自有提交；冲突时该仓库失败，不自动转为强制同步 | 需要保留自己的修改 |
+| 强制 · 对齐上游 | 将目标分支指向读取到的上游同名分支提交，丢弃目标分支原有的独有提交 | 确认 Fork 该分支只需跟随上游 |
+
+`There are merge conflicts` 表示 GitHub 检测到合并冲突，**本次未合入上游更新**。需要保留改动时，先在 GitHub 或本地解决冲突，再重新同步。确认不需要独有提交时，在概览勾选受影响的仓库，将「本次同步策略」切换为「强制 · 对齐上游」，点击「同步所选」并确认覆盖范围。
+
+- 「同步所选」只操作勾选的仓库；「同步全部」操作全部已保存仓库。「检查配置」检查全部已保存仓库且不写入。
+- 「本次同步策略」可临时选择合并或强制，不修改保存的配置；选择「使用各仓库设置」时使用每个仓库保存的策略。
+- 设置中的策略会持久保存，并用于定时任务。旧配置未指定策略时继续使用合并，无需数据库迁移。勾选仓库只影响本次手动执行，不改变定时任务范围。
+- 手动强制同步前会显示受影响的仓库和分支；新增强制策略或重新启用含强制策略的自动任务时也会提示覆盖行为。配置被其他页面修改后须刷新再操作。
+
+强制模式先读取上游和目标分支 SHA；已经一致时返回「已是最新」，不发送写入。写入后再次读取目标分支，只有与本轮读取的上游 SHA 一致才标记成功。若回读失败或提交不同，本轮保留失败结果，不自动重复写入。核验针对本轮上游提交快照；上游之后的新提交留待下次同步。
 
 ## 定时执行和免费额度
 
@@ -210,7 +228,9 @@ Cloudflare Cron 每 15 分钟唤醒一次 Worker。应用读取 D1 中的配置�
 
 正常个人使用只保存少量配置和最近 20 条报告，适合先使用免费计划。实际仍受 D1、Workers 的请求/CPU/子请求限制，以及 GitHub API 限额约束；使用付费计划时按该账号的计费规则处理，不能保证所有使用量均免费。
 
-每个仓库最多发出两次 GitHub 请求，20 个仓库最多 40 次，另有少量 D1 操作。Free 限额以 [Workers 官方限制](https://developers.cloudflare.com/workers/platform/limits/) 为准。
+合并模式每个仓库最多发出 2 次 GitHub 请求，强制模式最多 5 次（包括分支读取、写入和回读核验）。每轮在请求 GitHub 前按 `合并仓库数 × 2 + 强制仓库数 × 5 ≤ 50` 检查预算，因此仍支持 20 个合并仓库，全部强制时每轮最多 10 个。混合策略按同一公式计算，超限时整轮拒绝执行，请分批勾选。
+
+启用自动同步时，全部保存仓库必须满足上述预算；暂停时可保存更大的强制同步列表，之后手动分批执行。配置检查每个仓库只读取一次元信息，支持一次检查 20 个。另有少量 D1 内部请求；Free 限额以 [Workers 官方限制](https://developers.cloudflare.com/workers/platform/limits/) 为准。
 
 ## 更新部署与其他 CI
 
@@ -271,7 +291,7 @@ npm run build      # Wrangler dry run，不发布
 npm run check      # 运行全部检查
 ```
 
-测试覆盖数据库迁移、页面配置持久化、凭据加密、初始化竞争、会话失效、并发配置修改、定时频率与同步锁、历史记录保留和事务回滚、下次同步时间估算、GitHub 错误分类，以及部署中断、加密密钥保留、设置码重发和非交互 CI 的设置码输出。测试不替代实际账号权限和线上运行验证。
+测试覆盖数据库迁移、页面配置持久化、凭据加密、初始化竞争、会话失效、并发配置修改、定时频率与同步锁、历史记录保留和事务回滚、下次同步时间估算、GitHub 错误分类、仓库选择与临时策略、强制同步回读核验、分支保护和请求预算，以及部署中断、加密密钥保留、设置码重发和非交互 CI 的设置码输出。测试不替代实际账号权限和线上运行验证。
 
 ## HTTP API
 
@@ -286,7 +306,7 @@ npm run check      # 运行全部检查
 | POST | `/api/logout` | 当前 Cookie | 注销当前会话 |
 | GET | `/api/config` | 登录 | 获取配置、Token 是否已设置、同步锁状态、最近 20 条报告和预计下次同步时间 |
 | PUT | `/api/config` | 登录 | 保存页面配置，可更新 Token 或管理密码 |
-| POST | `/api/sync` | 登录 | 同步全部已保存仓库，或执行只读配置检查 |
+| POST | `/api/sync` | 登录 | 同步全部或选中的已保存仓库，可临时选择策略，或执行只读配置检查 |
 
 `GET /api/config` 和保存配置成功后的响应包含以下运行信息：
 
@@ -301,12 +321,23 @@ npm run check      # 运行全部检查
 `PUT /api/config` 必须包含 `revision`、`repositories`、`syncEnabled`、`intervalMinutes`。可选 `githubToken`：省略或空字符串保留，`null` 删除，新字符串覆盖；可选 `password` 更新密码。仓库项目格式：
 
 ```json
-{ "repository": "your-name/your-fork", "branch": "main" }
+{ "repository": "your-name/your-fork", "branch": "main", "syncMode": "merge" }
 ```
 
-`branch` 可省略。暂停状态允许零仓库；启用自动任务必须有 Token 和至少一个仓库。配置中只返回 `githubTokenConfigured`，不会返回 Token、密码哈希或加密密钥。请求体上限为 16 KiB，setup/login 为 2 KiB，sync 为 1 KiB；未知字段或无效配置直接报错。
+`branch` 可省略；显式指定时必须是合法 Git 分支名。`syncMode` 可省略，默认 `merge`；`force` 表示强制对齐上游同名分支。暂停状态允许零仓库；启用自动任务必须有 Token、至少一个仓库，且整组满足单轮请求预算。配置中只返回 `githubTokenConfigured`，不会返回 Token、密码哈希或加密密钥。请求体上限为 16 KiB，setup/login 为 2 KiB，sync 为 4 KiB；未知字段或无效配置直接报错。
 
-`POST /api/sync` 接受空请求体或 `{"dryRun":true}`；省略 dryRun 或设置为 false 时真实同步。全部成功返回 200，部分失败/跳过返回 502，并保留完整逐仓库结果。
+`POST /api/sync` 接受空请求体或以下可选字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `dryRun` | 布尔值；`true` 只读检查，省略或 `false` 时真实同步 |
+| `repositories` | 已保存仓库名称数组，如 `["your-name/your-fork"]`；省略时选择全部。不能为空、重复或包含未保存仓库，名称匹配不区分大小写 |
+| `syncMode` | `merge` 或 `force`，临时覆盖本次选中仓库的策略；省略时使用保存的各仓库策略 |
+| `revision` | `GET /api/config` 返回的当前配置版本号；提供时必须匹配。手动真实运行中含任何强制策略时必填，用于拒绝基于旧配置的覆盖操作 |
+
+例如，`{"repositories":["your-name/your-fork"],"syncMode":"merge","revision":2}` 只合并指定仓库，前提是当前配置版本确为 2。`{"dryRun":true}` 仍兼容旧调用方式。强制调用必须先读取当前配置、确认目标分支及丢弃独有提交的影响，再提交 `syncMode: "force"` 和匹配的 `revision`；只读检查不要求强制确认。
+
+全部成功返回 200，部分失败/跳过返回 502，并保留完整逐仓库结果。非法选择或超出单轮请求预算返回 400，版本过期返回 409，均在 GitHub 请求前拒绝。
 
 PowerShell 示例，管理密码从当前终端环境变量读取：
 
@@ -322,7 +353,9 @@ Invoke-RestMethod -Method Post -Uri "$workerUrl/api/logout" -WebSession $forkSyn
 
 ## 运行记录与故障处理
 
-最近 **20 条**已完成的配置检查、手动同步和自动同步报告保存在 D1，按完成顺序倒序展示。每条记录包含执行时间、运行方式、结果汇总和各仓库的结果，点击记录可展开详情；失败报告也会保留。超出 20 条时自动删除最旧记录，刷新或重新部署后仍可查看。
+最近 **20 条**已完成的配置检查、手动同步和自动同步报告保存在 D1，按完成顺序倒序展示。每条记录包含执行时间、运行方式、结果汇总和各仓库的实际同步策略与结果，点击记录可展开详情；失败报告也会保留。强制同步的 JSON 结果还包含已读取到的 `previousSha`、`upstreamSha`、`syncedSha`，便于核对原提交与更新结果。超出 20 条时自动删除最旧记录，刷新或重新部署后仍可查看。
+
+部分仓库同步的报告只包含所选仓库。概览会从保留的运行记录中查找其他仓库的最近结果；没有匹配的记录时显示「待运行」。
 
 页面上方继续显示最近一次结果，历史列表包含该次运行。自动同步处于暂停状态、尚未到执行间隔或已有同步锁时，跳过的 Cron 唤醒不产生历史记录。报告区分 `synced`、`up_to_date`、`checked`、`failed`、`skipped`；刷新按钮同时更新记录和预计下次同步时间。
 
@@ -344,8 +377,11 @@ Cloudflare Observability 也可查看运行日志。每轮输出 `event: fork_sy
 | GitHub 401 | 在页面更新过期或无效的 PAT |
 | GitHub 403 | 检查 Contents/Workflows、组织授权与分支保护；rate_limited 时等待后再运行 |
 | GitHub 404 | 检查 Fork 名称及 Token 权限；私有仓库无权限也可能返回 404 |
-| GitHub 409 | 通常为合并冲突；在 GitHub 或本地解决后重试 |
-| GitHub 422 | 检查目标分支存在性和 GitHub 返回的校验错误 |
+| 合并模式 GitHub 409 / `There are merge conflicts` | 合并冲突，本次未合入上游更新；保留改动时先解决冲突。确认可丢弃独有提交时，可勾选该仓库并选择强制同步 |
+| 强制模式读取分支返回 404 | 确认上游和 Fork 都存在目标同名分支，且 Token 可读取上游；不会自动改用默认分支 |
+| GitHub 422 | 检查目标分支存在性、分支保护和 GitHub 返回的校验错误；强制模式也不能绕过仓库规则 |
+| `verification_failed` | 写入结果或回读 SHA 与预期不一致，可能有并发推送；先检查 GitHub 分支和报告中的 SHA，不自动重试覆盖 |
+| 超过单轮请求限制 | 减少本轮所选仓库或强制策略数量；启用自动任务前也须满足整组预算 |
 | 仓库地址跳转 | 在页面更新仓库名称；客户端不会携带凭据自动跟随重定向 |
 | 配置版本冲突 | 页面重新加载最新配置后再编辑保存 |
 | 同步一直显示运行中 | 刷新查看；异常中断产生的锁最多保留 10 分钟 |
@@ -371,4 +407,4 @@ test/               SQLite 集成测试和模拟 API/部署测试
 wrangler.jsonc      Worker、D1、静态资源与 Cron 配置
 ```
 
-官方参考：[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/)、[构建配置和发布权限](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[GitHub Fork 同步 API](https://docs.github.com/en/rest/branches/branches#sync-a-fork-branch-with-the-upstream-repository)、[D1 迁移](https://developers.cloudflare.com/d1/reference/migrations/)、[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)、[Workers Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。
+官方参考：[Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/)、[构建配置和发布权限](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[GitHub Fork 同步 API](https://docs.github.com/en/rest/branches/branches#sync-a-fork-branch-with-the-upstream-repository)、[GitHub 分支引用更新 API](https://docs.github.com/en/rest/git/refs#update-a-reference)、[D1 迁移](https://developers.cloudflare.com/d1/reference/migrations/)、[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)、[Workers Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。

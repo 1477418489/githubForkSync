@@ -1,7 +1,7 @@
 import { authorize, login, logout, requireSetupToken, sessionCookie, setup } from "./auth.ts";
-import { ConfigurationError } from "./config.ts";
+import { ConfigurationError, parseSyncOptions } from "./config.ts";
 import { requireEncryptionKey } from "./crypto.ts";
-import { allowFields, checkOrigin, HttpError, json, readObject } from "./http.ts";
+import { checkOrigin, HttpError, json, readObject } from "./http.ts";
 import { executeSync } from "./service.ts";
 import { database, publicSettings, readSettings, saveSettings } from "./storage.ts";
 import type { Env } from "./types.ts";
@@ -46,10 +46,13 @@ export default {
         const config = await saveSettings(db, env, await readObject(request));
         return json(config, 200, config.reloginRequired ? { "Set-Cookie": sessionCookie(request) } : {});
       }
-      const options = await readObject(request, 1024, true);
-      allowFields(options, ["dryRun"]);
-      if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") throw new HttpError(400, "dryRun 必须是布尔值。");
-      const report = await executeSync(env, "manual", options.dryRun === true);
+      let options;
+      try { options = parseSyncOptions(await readObject(request, 4096, true)); }
+      catch (error) {
+        if (error instanceof ConfigurationError) throw new HttpError(400, error.message);
+        throw error;
+      }
+      const report = await executeSync(env, "manual", options);
       return json(report, report?.ok ? 200 : 502);
     } catch (error) {
       if (error instanceof ConfigurationError) return json({ error: error.message }, 503);
@@ -60,7 +63,7 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    const report = await executeSync(env, "scheduled", false, controller.scheduledTime);
+    const report = await executeSync(env, "scheduled", {}, controller.scheduledTime);
     if (report && !report.ok) {
       throw new Error("同步失败：" + report.summary.failed + " 个失败，" + report.summary.skipped + " 个跳过；runId=" + report.runId);
     }

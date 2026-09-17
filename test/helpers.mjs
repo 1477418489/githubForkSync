@@ -48,6 +48,10 @@ export function merged(merge_type = "fast-forward") {
   return { message: "Synced with upstream", merge_type, base_branch: "upstream:main" };
 }
 
+export function branchRef(sha = "b".repeat(40), branch = "main") {
+  return { ref: "refs/heads/" + branch, object: { type: "commit", sha } };
+}
+
 export function stubGitHub(t, responses) {
   let index = 0;
   return t.mock.method(globalThis, "fetch", async () => {

@@ -1,6 +1,16 @@
+export type SyncMode = "merge" | "force";
+
 export interface RepositoryTarget {
   repository: string;
   branch?: string;
+  syncMode?: SyncMode;
+}
+
+export interface SyncOptions {
+  dryRun?: boolean;
+  repositories?: string[];
+  syncMode?: SyncMode;
+  revision?: number;
 }
 
 export interface Env {
@@ -44,6 +54,11 @@ export interface SyncResult {
   upstream: string | null;
   status: SyncStatus;
   message: string;
+  syncMode: SyncMode;
+  upstreamBranch?: string;
+  previousSha?: string;
+  upstreamSha?: string;
+  syncedSha?: string;
   code?: string;
   githubStatus?: number;
   mergeType?: string;

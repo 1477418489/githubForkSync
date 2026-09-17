@@ -206,7 +206,7 @@ describe("D1-backed HTTP API", () => {
     const fetch = stubGitHub(t, []);
     const response = await worker.fetch(new Request("https://fork-sync.example/api/sync", { method: "POST", headers: { Cookie: COOKIE }, body: "{}" }), env);
     assert.equal(response.status, 415);
-    const oversized = await worker.fetch(new Request("https://fork-sync.example/api/sync", { method: "POST", headers: { Cookie: COOKIE, "Content-Type": "application/json" }, body: "中".repeat(400) }), env);
+    const oversized = await worker.fetch(new Request("https://fork-sync.example/api/sync", { method: "POST", headers: { Cookie: COOKIE, "Content-Type": "application/json" }, body: "中".repeat(1400) }), env);
     assert.equal(oversized.status, 413);
     assert.equal(fetch.mock.callCount(), 0);
   });
