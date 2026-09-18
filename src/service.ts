@@ -15,7 +15,11 @@ export async function executeSync(env: Env, trigger: SyncReport["trigger"], opti
     throw new HttpError(409, "请先完成首次设置。");
   }
   if (!settings.github_token) throw new HttpError(409, "请先在设置页面保存 GitHub Token。");
-  let repositories = parseRepositories(settings.repositories);
+  let repositories = parseRepositories(settings.repositories, trigger === "scheduled");
+  if (trigger === "scheduled") {
+    repositories = repositories.filter((target) => target.autoSync !== false);
+    if (!repositories.length) return null;
+  }
   const dryRun = options.dryRun === true;
   if (options.revision !== undefined && options.revision !== settings.revision) {
     throw new HttpError(409, "配置已被其他页面修改，请刷新后重新选择仓库和同步策略。");

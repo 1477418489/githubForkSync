@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
     "test:watch": "node --test --watch test/*.test.mjs",
-    "check:ui": "node --check public/app.js",
+    "check:ui": "node --check public/app.js && node --check public/sync-options.js",
     "check:scripts": "node --check scripts/deploy.mjs",
     "build": "wrangler deploy --dry-run --outdir dist",
     "check": "npm run typecheck && npm test && npm run check:ui && npm run check:scripts && npm run build",

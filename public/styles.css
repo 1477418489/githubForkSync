@@ -63,6 +63,7 @@ input::placeholder { color: #9ba69d; }
 .repo-main { flex: 1; min-width: 0; }
 .sync-options { padding: 16px 24px 0; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .sync-options .checkbox-label { margin: 0; }
+.sync-options #select-failed { padding: 8px 0; font-size: 12px; }
 .sync-mode-control { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .sync-mode-control label { margin: 0; white-space: nowrap; }
 .sync-mode-control select { width: auto; }
@@ -124,7 +125,10 @@ h3 { color: #64785f; font-size: 13px; font-weight: 600; margin: 10px 0 9px; }
 .editor-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 12px; align-items: end; }
 .editor-row label { font-size: 11px; color: #7d8b7e; }
 .editor-row .remove-repository { font-size: 12px; padding: 10px 12px; }
-.schedule-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center; }
+.editor-row .editor-auto-sync { grid-column: 1 / -1; margin: 0; color: #365b48; font-size: 12px; }
+.editor-row input[type="checkbox"] { padding: 0; }
+.schedule-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
+.custom-interval { margin-top: 12px; }
 select { min-height: 42px; border: 1px solid #dce3da; border-radius: 8px; background: #fafcf9; padding: 9px 12px; color: #294d38; font: inherit; font-size: 13px; }
 select:focus-visible { outline: 2px solid #aecbb6; outline-offset: 2px; }
 .password-settings { border: 0; margin: 0; padding-top: 22px; }
@@ -161,7 +165,7 @@ select:focus-visible { outline: 2px solid #aecbb6; outline-offset: 2px; }
   .editor-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px 8px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
   .editor-repository { grid-column: 1 / -1; }
   .editor-row input { padding: 10px 8px; font-size: 12px; }
-  .schedule-settings { gap: 16px; }
+  .schedule-settings { grid-template-columns: 1fr; gap: 16px; }
   .password-grid { grid-template-columns: 1fr; gap: 16px; }
   .save-bar { align-items: flex-start; flex-direction: column; gap: 16px; }
   .save-bar button { width: 100%; }

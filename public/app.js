@@ -1,3 +1,5 @@
+import { intervalLabel, retryableRepositories } from "./sync-options.js";
+
 const byId = (id) => document.getElementById(id);
 const statusLabels = { pending: "待运行", synced: "已更新", up_to_date: "已是最新", checked: "检查通过", failed: "失败", skipped: "已跳过" };
 const modeLabels = { merge: "合并", force: "强制对齐" };
@@ -18,6 +20,7 @@ function setBusy(value) {
   busy = value;
   for (const input of document.querySelectorAll("button, input, select")) input.disabled = value;
   byId("github-token").disabled = value || byId("clear-token").checked;
+  byId("custom-interval").disabled = value || byId("interval-minutes").value !== "custom";
   byId("add-repository").disabled = value || byId("repository-editor").children.length >= 20;
   for (const id of ["check", "sync"]) byId(id).disabled = value || !config?.githubTokenConfigured || !config?.repositories.length || Boolean(config?.running);
   updateSelection();
@@ -32,6 +35,20 @@ function updateSelection() {
   byId("select-all").disabled = busy || total === 0;
   byId("selection-count").textContent = "已选 " + count + " / " + total;
   byId("sync-selected").disabled = busy || !config?.githubTokenConfigured || Boolean(config?.running) || count === 0;
+  const failures = failedTargets().length;
+  byId("select-failed").disabled = busy || failures === 0;
+  byId("select-failed").textContent = "选择失败项" + (failures ? "（" + failures + "）" : "");
+}
+
+function failedTargets() {
+  return retryableRepositories(config?.repositories ?? [], [config?.lastRun, ...(config?.recentRuns ?? [])].filter(Boolean));
+}
+
+function updateIntervalInput() {
+  const custom = byId("interval-minutes").value === "custom";
+  byId("custom-interval-field").hidden = !custom;
+  byId("custom-interval").required = custom;
+  byId("custom-interval").disabled = busy || !custom;
 }
 
 function updateModeNote() {
@@ -60,6 +77,7 @@ function clearPrivateState() {
   byId("sync-mode").value = "configured";
   updateModeNote();
   for (const form of document.querySelectorAll("form")) form.reset();
+  updateIntervalInput();
   byId("repositories").replaceChildren();
   byId("repository-editor").replaceChildren();
   byId("run-json").textContent = "";
@@ -99,10 +117,6 @@ async function api(path, { method = "GET", body } = {}) {
   return data;
 }
 
-function intervalLabel(minutes) {
-  return minutes < 60 ? "每 " + minutes + " 分钟" : minutes === 1440 ? "每天" : "每 " + minutes / 60 + " 小时";
-}
-
 function renderRepositories(repositories, report = null) {
   const names = new Set(repositories.map((target) => target.repository.toLowerCase()));
   selectedRepositories = new Set(selectedRepositories === null ? names : [...selectedRepositories].filter((name) => names.has(name)));
@@ -136,6 +150,7 @@ function renderRepositories(repositories, report = null) {
     link.href = "https://github.com/" + target.repository.split("/").map(encodeURIComponent).join("/");
     row.querySelector(".branch").textContent = repository.branch || "默认分支";
     row.querySelector(".sync-mode-label").textContent = "保存策略：" + modeLabels[target.syncMode || "merge"];
+    row.querySelector(".auto-sync-label").textContent = target.autoSync === false ? "仅手动同步" : config?.syncEnabled ? "参与自动同步" : "自动同步已暂停";
     if (repository.upstream) row.querySelector(".upstream").textContent = "上游 " + repository.upstream;
     const status = Object.hasOwn(statusLabels, repository.status) ? repository.status : "pending";
     const badge = row.querySelector(".badge");
@@ -214,6 +229,7 @@ function addRepository(target = {}) {
     input.value = target[field] || (field === "syncMode" ? "merge" : "");
     row.querySelector(labels[field]).htmlFor = input.id;
   }
+  row.querySelector('[data-field="autoSync"]').checked = target.autoSync !== false;
   row.querySelector(".force-note").hidden = target.syncMode !== "force";
   row.querySelector('[data-field="syncMode"]').addEventListener("change", (event) => {
     event.target.closest(".editor-row").querySelector(".force-note").hidden = event.target.value !== "force";
@@ -233,7 +249,12 @@ function fillSettings(value) {
   byId("github-token").placeholder = value.githubTokenConfigured ? "已保存，留空保留原 Token" : "填写具有目标 Fork 写权限的 Token";
   byId("clear-token-label").hidden = !value.githubTokenConfigured;
   byId("sync-enabled").checked = value.syncEnabled;
-  byId("interval-minutes").value = String(value.intervalMinutes);
+  byId("interval-minutes").value = value.intervals.includes(value.intervalMinutes) ? String(value.intervalMinutes) : "custom";
+  byId("custom-interval").value = String(value.intervalMinutes);
+  for (const [attribute, limit] of Object.entries(value.intervalRange ?? { min: 15, max: 10080, step: 15 })) {
+    byId("custom-interval").setAttribute(attribute, String(limit));
+  }
+  updateIntervalInput();
   byId("repository-editor").replaceChildren();
   for (const repository of value.repositories.length ? value.repositories : [{}]) addRepository(repository);
   byId("settings-updated").textContent = "上次保存：" + new Date(value.updatedAt).toLocaleString("zh-CN", { hour12: false });
@@ -242,10 +263,12 @@ function fillSettings(value) {
 async function loadConfig(fillForm = true) {
   config = await api("/api/config");
   showScreen("workspace");
-  byId("schedule-status").textContent = config.running ? "同步任务正在执行，稍后刷新查看结果" : config.syncEnabled ? "自动同步 · " + intervalLabel(config.intervalMinutes) : "自动同步已暂停";
+  const automaticCount = config.repositories.filter((target) => target.autoSync !== false).length;
+  byId("schedule-status").textContent = config.running ? "同步任务正在执行，稍后刷新查看结果" : config.syncEnabled
+    ? "自动同步 · " + intervalLabel(config.intervalMinutes) + " · " + automaticCount + " 个仓库" : "自动同步已暂停";
   byId("next-sync").textContent = config.nextSyncAt
     ? "预计下次同步：" + formatTime(config.nextSyncAt)
-    : config.syncEnabled ? "下次同步：完成 Token 和仓库配置后安排" : "下次同步：已暂停";
+    : config.syncEnabled ? automaticCount ? "下次同步：完成 Token 配置后安排" : "下次同步：尚未选择自动同步仓库" : "下次同步：已暂停";
   renderRepositories(config.repositories, config.lastRun);
   renderReport(config.lastRun);
   renderHistory(config.recentRuns ?? (config.lastRun ? [config.lastRun] : []), config.historyLimit ?? 20);
@@ -315,22 +338,25 @@ byId("settings-form").addEventListener("submit", async (event) => {
     const repository = row.querySelector('[data-field="repository"]').value.trim();
     const branch = row.querySelector('[data-field="branch"]').value;
     const syncMode = row.querySelector('[data-field="syncMode"]').value;
-    return { repository, ...(branch ? { branch } : {}), ...(syncMode === "force" ? { syncMode } : {}) };
+    const autoSync = row.querySelector('[data-field="autoSync"]').checked;
+    return { repository, ...(branch ? { branch } : {}), ...(syncMode === "force" ? { syncMode } : {}), ...(autoSync ? {} : { autoSync: false }) };
   });
   const token = byId("github-token").value.trim();
   const body = {
     repositories, revision: formRevision,
     syncEnabled: byId("sync-enabled").checked,
-    intervalMinutes: Number(byId("interval-minutes").value),
+    intervalMinutes: Number(byId("interval-minutes").value === "custom" ? byId("custom-interval").value : byId("interval-minutes").value),
     ...(byId("clear-token").checked ? { githubToken: null } : token ? { githubToken: token } : {}),
     ...(password ? { password } : {}),
   };
-  const newForceTargets = repositories.filter((target) => target.syncMode === "force" && (
-    (!config.syncEnabled && body.syncEnabled) || !config.repositories.some((previous) =>
-      previous.repository.toLowerCase() === target.repository.toLowerCase() && previous.branch === target.branch && previous.syncMode === "force")
-  ));
-  if (newForceTargets.length && !confirm("以下仓库将保存强制同步策略，启用自动同步后会持续覆盖目标分支并丢弃独有提交：\n\n"
-    + newForceTargets.map((target) => target.repository + "（" + (target.branch || "默认分支") + "）").join("\n") + "\n\n确认保存？")) return;
+  const newForceTargets = repositories.filter((target) => {
+    if (target.syncMode !== "force") return false;
+    const previous = config.repositories.find((item) => item.repository.toLowerCase() === target.repository.toLowerCase() && item.branch === target.branch);
+    return previous?.syncMode !== "force" || (body.syncEnabled && target.autoSync !== false && (!config.syncEnabled || previous.autoSync === false));
+  });
+  if (newForceTargets.length && !confirm("以下仓库将使用强制同步，执行时会覆盖目标分支并丢弃独有提交：\n\n"
+    + newForceTargets.map((target) => target.repository + "（" + (target.branch || "默认分支") + "） · "
+      + (target.autoSync === false ? "仅手动同步" : "参与自动同步")).join("\n") + "\n\n确认保存？")) return;
   setBusy(true);
   notice("正在保存设置…");
   try {
@@ -362,6 +388,8 @@ async function run(dryRun, selectedOnly = false) {
       dryRun, repositories: targets.map((target) => target.repository), revision: config.revision,
       ...(syncMode === "configured" ? {} : { syncMode }),
     } });
+    config.lastRun = report;
+    config.recentRuns = [report, ...(config.recentRuns ?? []).filter((previous) => previous.runId !== report.runId)].slice(0, config.historyLimit ?? 20);
     renderReport(report);
     renderRepositories(config.repositories, report);
     let refreshError = "";
@@ -406,12 +434,20 @@ byId("settings-tab").addEventListener("click", () => showTab("settings"));
 byId("check").addEventListener("click", () => run(true));
 byId("sync").addEventListener("click", () => run(false));
 byId("sync-selected").addEventListener("click", () => run(false, true));
+byId("select-failed").addEventListener("click", () => {
+  if (busy || !config) return;
+  selectedRepositories = new Set(failedTargets().map((target) => target.repository.toLowerCase()));
+  renderRepositories(config.repositories, config.lastRun);
+  updateSelection();
+  notice("已选中最近同步失败或跳过的 " + selectedRepositories.size + " 个仓库。检查原因后，点击「同步所选」重试。");
+});
 byId("select-all").addEventListener("change", (event) => {
   selectedRepositories = new Set(event.target.checked ? config.repositories.map((target) => target.repository.toLowerCase()) : []);
   for (const checkbox of byId("repositories").querySelectorAll(".select-repository")) checkbox.checked = event.target.checked;
   updateSelection();
 });
 byId("sync-mode").addEventListener("change", updateModeNote);
+byId("interval-minutes").addEventListener("change", updateIntervalInput);
 byId("refresh").addEventListener("click", refresh);
 byId("reload-settings").addEventListener("click", refresh);
 byId("retry").addEventListener("click", boot);

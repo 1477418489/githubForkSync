@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConfigurationError, validatePassword, validateGitHubToken, parseRepositories, parseSyncOptions, validateSyncBudget } from "../src/config.ts";
+import { ConfigurationError, isValidSyncInterval, validatePassword, validateGitHubToken, parseRepositories, parseSyncOptions, validateSyncBudget } from "../src/config.ts";
 import { GITHUB_TOKEN, PASSWORD } from "./helpers.mjs";
 
 describe("repository configuration", () => {
@@ -17,8 +17,23 @@ describe("repository configuration", () => {
     }
   });
 
-  it("rejects URLs, traversal paths and unexpected fields", () => {
-    for (const repository of ["https://github.com/alice/repo", "alice/..", "alice/.", "../repo", "alice/repo/extra", "alice/repo?x=1"]) {
+  it("normalizes GitHub repository links and HTTPS clone URLs before detecting duplicates", () => {
+    for (const repository of [
+      " https://github.com/alice/project ", "https://github.com/alice/project/", "https://github.com/alice/project.git",
+      "https://github.com/alice/project?tab=readme-ov-file#readme", "HTTPS://GITHUB.COM/alice/project.git/",
+    ]) assert.deepEqual(parseRepositories([{ repository }]), [{ repository: "alice/project" }]);
+    assert.throws(() => parseRepositories([{ repository: "alice/project" }, { repository: "https://github.com/ALICE/Project.git" }]), /重复/);
+    assert.deepEqual(parseSyncOptions({ repositories: ["https://github.com/alice/project"] }), { repositories: ["alice/project"] });
+  });
+
+  it("rejects unrelated URLs, branch links, traversal paths and unexpected fields", () => {
+    for (const repository of [
+      "https://gitlab.com/alice/repo", "https://github.com.evil.example/alice/repo", "https://github.com@evil.example/alice/repo",
+      "https://user@github.com/alice/repo", "http://github.com/alice/repo", "git@github.com:alice/repo.git",
+      "https://github.com/alice/repo/tree/main", "https://github.com/alice/../repo", "https://github.com/alice/%2e%2e",
+      "https://github.com/alice/..", "https://github.com/alice/repo\\extra", "https://github.com/alice/repo\n/extra",
+      "alice/..", "alice/.", "../repo", "alice/repo/extra", "alice/repo?x=1",
+    ]) {
       assert.throws(() => parseRepositories([{ repository }]), ConfigurationError);
     }
     assert.throws(() => parseRepositories([{ repository: "alice/project", branches: ["main"] }]), /只支持/);
@@ -52,6 +67,19 @@ describe("repository configuration", () => {
     for (const syncMode of [null, true, "reset", "FORCE", ""]) {
       assert.throws(() => parseRepositories([{ repository: "alice/project", syncMode }]), /syncMode/);
     }
+  });
+
+  it("preserves per-repository automatic sync switches and rejects truthy non-booleans", () => {
+    const targets = [{ repository: "alice/project", autoSync: false }, { repository: "alice/another", autoSync: true }];
+    assert.deepEqual(parseRepositories(JSON.stringify(targets)), targets);
+    for (const autoSync of [null, 0, 1, "false", "true", ""]) {
+      assert.throws(() => parseRepositories([{ repository: "alice/project", autoSync }]), /autoSync/);
+    }
+  });
+
+  it("supports custom intervals up to a week without rounding invalid input", () => {
+    for (const minutes of [15, 45, 90, 120, 1440, 2880, 10080]) assert.equal(isValidSyncInterval(minutes), true);
+    for (const minutes of [undefined, null, "60", 0, 10, 16, 30.5, 10095, NaN, Infinity]) assert.equal(isValidSyncInterval(minutes), false);
   });
 
   it("rejects branch names that could address another ref or normalize a request path", () => {

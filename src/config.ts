@@ -1,12 +1,25 @@
 import type { RepositoryTarget, SyncMode, SyncOptions } from "./types.ts";
 
 export const MAX_REPOSITORIES = 20;
-export const SYNC_INTERVALS = [15, 30, 60, 180, 360, 720, 1440] as const;
+export const SYNC_INTERVALS = [15, 30, 60, 180, 360, 720, 1440, 10080] as const;
+export const SYNC_INTERVAL_RANGE = { min: 15, max: 10080, step: 15 } as const;
 // Workers Free 每次执行最多 50 次外部请求；强制同步包含写入后的回读。
 export const MAX_GITHUB_REQUESTS = 50;
 
 export class ConfigurationError extends Error {
   override name = "ConfigurationError";
+}
+
+export function isValidSyncInterval(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= SYNC_INTERVAL_RANGE.min && value <= SYNC_INTERVAL_RANGE.max && value % SYNC_INTERVAL_RANGE.step === 0;
+}
+
+function normalizeRepository(value: string): string {
+  const repository = value.trim();
+  // 只接受仓库首页/HTTPS 克隆地址；不从 tree、commit 等链接猜测分支。
+  const url = /^https:\/\/github\.com\/([a-zA-Z0-9-]+\/[a-zA-Z0-9._-]+)\/?(?:[?#][^\s]*)?$/i.exec(repository);
+  return url ? url[1]!.replace(/\.git$/, "") : repository;
 }
 
 export function isValidBranch(value: unknown): value is string {
@@ -73,18 +86,18 @@ export function parseRepositories(value: unknown, allowEmpty = false): Repositor
       throw new ConfigurationError(`${position} 必须是包含 repository 的对象。`);
     }
     const entry = item as Record<string, unknown>;
-    if (Object.keys(entry).some((key) => !["repository", "branch", "syncMode"].includes(key))) {
-      throw new ConfigurationError(`${position} 只支持 repository、branch 和 syncMode 字段。`);
+    if (Object.keys(entry).some((key) => !["repository", "branch", "syncMode", "autoSync"].includes(key))) {
+      throw new ConfigurationError(`${position} 只支持 repository、branch、syncMode 和 autoSync 字段。`);
     }
     if (typeof entry.repository !== "string") {
       throw new ConfigurationError(`${position} 缺少 repository。`);
     }
-    const repository = entry.repository.trim();
+    const repository = normalizeRepository(entry.repository);
     if (
       !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\/[a-zA-Z0-9._-]{1,100}$/.test(repository) ||
       [".", ".."].includes(repository.split("/")[1] ?? "")
     ) {
-      throw new ConfigurationError(`${position} 的 repository 格式应为 owner/repo，不要填写 URL。`);
+      throw new ConfigurationError(`${position} 的 repository 应为 owner/repo 或 https://github.com/owner/repo 仓库链接，不支持分支或文件链接。`);
     }
     const key = repository.toLowerCase();
     if (seen.has(key)) {
@@ -95,6 +108,9 @@ export function parseRepositories(value: unknown, allowEmpty = false): Repositor
     if (entry.syncMode !== undefined && entry.syncMode !== "merge" && entry.syncMode !== "force") {
       throw new ConfigurationError(`${position} 的 syncMode 必须是 merge 或 force。`);
     }
+    if (entry.autoSync !== undefined && typeof entry.autoSync !== "boolean") {
+      throw new ConfigurationError(`${position} 的 autoSync 必须是布尔值；false 表示仅手动同步。`);
+    }
     if (entry.branch !== undefined && !isValidBranch(entry.branch)) {
       throw new ConfigurationError(`${position} 的 branch 必须是 1–255 个字符的合法 Git 分支名；使用默认分支时请省略该字段。`);
     }
@@ -102,6 +118,7 @@ export function parseRepositories(value: unknown, allowEmpty = false): Repositor
       repository,
       ...(entry.branch === undefined ? {} : { branch: entry.branch as string }),
       ...(entry.syncMode === undefined ? {} : { syncMode: entry.syncMode }),
+      ...(entry.autoSync === undefined ? {} : { autoSync: entry.autoSync as boolean }),
     };
   });
 }

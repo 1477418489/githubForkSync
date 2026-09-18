@@ -116,6 +116,17 @@ describe("manual repository selection and strategy overrides", () => {
 });
 
 describe("saved synchronization strategies", () => {
+  it("stores pasted repository URLs as names and uses only the canonical GitHub API path", async (t) => {
+    silence(t);
+    const env = await environment(t);
+    const response = await worker.fetch(saveRequest(settings([{ repository: "https://github.com/alice/project.git?tab=readme-ov-file" }])), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).repositories, [{ repository: "alice/project" }]);
+    const fetch = stubGitHub(t, [repository(), merged()]);
+    assert.equal((await worker.fetch(jsonRequest({}), env)).status, 200);
+    assert.equal(fetch.mock.calls[0].arguments[0], "https://api.github.com/repos/alice/project");
+  });
+
   it("round-trips strategies in the existing JSON column and uses them for Cron", async (t) => {
     silence(t);
     const env = await environment(t);

@@ -1,4 +1,4 @@
-import { ConfigurationError, MAX_REPOSITORIES, parseRepositories, SYNC_INTERVALS, validateGitHubToken, validatePassword, validateSyncBudget } from "./config.ts";
+import { ConfigurationError, isValidSyncInterval, MAX_REPOSITORIES, parseRepositories, SYNC_INTERVAL_RANGE, SYNC_INTERVALS, validateGitHubToken, validatePassword, validateSyncBudget } from "./config.ts";
 import { encryptToken, hashPassword, requireEncryptionKey } from "./crypto.ts";
 import { allowFields, HttpError } from "./http.ts";
 import type { Database, Env, SettingsRow, SyncReport, SyncStateRow } from "./types.ts";
@@ -30,7 +30,7 @@ export async function publicSettings(db: Database, row?: SettingsRow) {
     .bind(RUN_HISTORY_LIMIT).all<{ report_json: string }>();
   const now = Date.now();
   // 与 */15 Cron 对齐；手动运行不改变 last_scheduled_at。实际执行仍可能受调度延迟和同步锁影响。
-  const nextSyncAt = settings.sync_enabled === 1 && settings.github_token && repositories.length > 0
+  const nextSyncAt = settings.sync_enabled === 1 && settings.github_token && repositories.some((target) => target.autoSync !== false)
     ? new Date(Math.ceil(Math.max(now + 1, state.last_scheduled_at + settings.interval_minutes * 60_000)
       / CRON_INTERVAL_MS) * CRON_INTERVAL_MS).toISOString()
     : null;
@@ -43,6 +43,7 @@ export async function publicSettings(db: Database, row?: SettingsRow) {
     updatedAt: settings.updated_at,
     maxRepositories: MAX_REPOSITORIES,
     intervals: SYNC_INTERVALS,
+    intervalRange: SYNC_INTERVAL_RANGE,
     running: state.lock_until > now,
     nextSyncAt,
     historyLimit: RUN_HISTORY_LIMIT,
@@ -58,15 +59,22 @@ export async function saveSettings(db: Database, env: Env, body: Record<string, 
   if (!Number.isSafeInteger(body.revision) || body.revision !== previous.revision) {
     throw new HttpError(409, "配置已被其他页面修改，请刷新后重试。");
   }
-  if (typeof body.syncEnabled !== "boolean" || !SYNC_INTERVALS.some((minutes) => minutes === body.intervalMinutes)) {
-    throw new HttpError(400, "请选择有效的同步开关和同步间隔。");
+  if (typeof body.syncEnabled !== "boolean") {
+    throw new HttpError(400, "请选择有效的自动同步开关。");
+  }
+  if (!isValidSyncInterval(body.intervalMinutes)) {
+    throw new HttpError(400, "同步间隔须为 15–10080 分钟（最长 7 天），且为 15 的整数倍。");
   }
   let repositories;
   let newToken: string | null | undefined;
   let password: string | undefined;
   try {
     repositories = parseRepositories(body.repositories, !body.syncEnabled);
-    if (body.syncEnabled) validateSyncBudget(repositories);
+    if (body.syncEnabled) {
+      const automatic = repositories.filter((target) => target.autoSync !== false);
+      if (!automatic.length) throw new ConfigurationError("请至少勾选一个仓库参与自动同步，或关闭自动同步。");
+      validateSyncBudget(automatic);
+    }
     if (body.githubToken === null) newToken = null;
     else if (body.githubToken !== undefined && body.githubToken !== "") newToken = validateGitHubToken(body.githubToken);
     if (body.password !== undefined) password = validatePassword(body.password);

@@ -4,6 +4,7 @@ export interface RepositoryTarget {
   repository: string;
   branch?: string;
   syncMode?: SyncMode;
+  autoSync?: boolean;
 }
 
 export interface SyncOptions {

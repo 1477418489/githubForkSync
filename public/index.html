@@ -80,6 +80,7 @@
               <div class="sync-options">
                 <label class="checkbox-label"><input id="select-all" type="checkbox" />全选</label>
                 <span id="selection-count" class="muted">已选 0 / 0</span>
+                <button id="select-failed" class="text-button" type="button" title="选择最近一次实际同步失败或跳过的仓库；配置检查不影响此选择">选择失败项</button>
                 <div class="sync-mode-control"><label for="sync-mode">本次同步策略</label><select id="sync-mode" aria-describedby="sync-mode-note"><option value="configured">使用各仓库设置</option><option value="merge">合并 · 保留自有提交</option><option value="force">强制 · 对齐上游</option></select></div>
                 <button id="sync-selected" class="secondary" type="button">同步所选</button>
               </div>
@@ -110,13 +111,21 @@
                 <label id="clear-token-label" class="checkbox-label muted" hidden><input id="clear-token" type="checkbox" />移除已保存的 Token，并暂停自动同步</label>
               </div>
               <div class="setting-block">
-                <div class="section-heading"><div><h3>同步仓库</h3><p class="muted">填写 Fork 的 owner/repo；分支留空时同步默认分支，最多 20 个仓库。</p></div><button id="add-repository" class="secondary" type="button">添加仓库</button></div>
+                <div class="section-heading"><div><h3>同步仓库</h3><p class="muted">填写 Fork 的 owner/repo 或粘贴 GitHub 仓库链接；分支留空使用默认分支，最多 20 个。</p></div><button id="add-repository" class="secondary" type="button">添加仓库</button></div>
                 <div id="repository-editor" class="repository-editor"></div>
-                <p class="field-note">保存的策略用于定时任务，也用于选择「使用各仓库设置」的手动同步。合并保留自有提交，遇到冲突停止；强制同步会覆盖目标分支。</p>
+                <p class="field-note">取消仓库的「参与自动同步」可单独暂停该仓库，仍可手动同步。合并保留自有提交，遇到冲突停止；强制同步会覆盖目标分支。</p>
               </div>
               <div class="setting-block schedule-settings">
                 <div><label class="checkbox-label"><input id="sync-enabled" type="checkbox" />启用自动同步</label><p class="field-note">暂停自动任务后，仍可以手动同步。</p></div>
-                <div><label for="interval-minutes">同步间隔</label><select id="interval-minutes"><option value="15">每 15 分钟</option><option value="30">每 30 分钟</option><option value="60">每小时</option><option value="180">每 3 小时</option><option value="360">每 6 小时</option><option value="720">每 12 小时</option><option value="1440">每天</option></select></div>
+                <div>
+                  <label for="interval-minutes">同步间隔</label>
+                  <select id="interval-minutes"><option value="15">每 15 分钟</option><option value="30">每 30 分钟</option><option value="60">每小时</option><option value="180">每 3 小时</option><option value="360">每 6 小时</option><option value="720">每 12 小时</option><option value="1440">每天</option><option value="10080">每周</option><option value="custom">自定义…</option></select>
+                  <div id="custom-interval-field" class="custom-interval" hidden>
+                    <label for="custom-interval">间隔（分钟）</label>
+                    <input id="custom-interval" type="number" min="15" max="10080" step="15" inputmode="numeric" placeholder="例如 90" aria-describedby="interval-note" />
+                  </div>
+                  <p id="interval-note" class="field-note">支持 15 分钟至 7 天，按 15 分钟递增。每周表示间隔 7 天执行。</p>
+                </div>
               </div>
               <details class="password-settings">
                 <summary>更改管理密码</summary>
@@ -141,17 +150,18 @@
     <template id="repository-template">
       <li class="repository"><label class="checkbox-label repo-selector"><input class="select-repository" type="checkbox" /></label><div class="repo-main">
         <div class="repo-top"><a class="repo-link" target="_blank" rel="noopener noreferrer"></a><span class="badge" data-status="pending">待运行</span></div>
-        <p class="repo-meta"><span class="upstream">上游信息将在检查或同步后显示</span><span class="branch-label">分支 <code class="branch"></code></span><span class="sync-mode-label"></span></p>
+        <p class="repo-meta"><span class="upstream">上游信息将在检查或同步后显示</span><span class="branch-label">分支 <code class="branch"></code></span><span class="sync-mode-label"></span><span class="auto-sync-label"></span></p>
         <p class="repo-message" hidden></p>
       </div></li>
     </template>
     <template id="editor-template">
       <div class="editor-row">
-        <div class="editor-repository"><label class="editor-repo-label">仓库</label><input data-field="repository" placeholder="your-name/your-fork" maxlength="140" spellcheck="false" required /></div>
+        <div class="editor-repository"><label class="editor-repo-label">仓库</label><input data-field="repository" placeholder="owner/repo 或 GitHub 仓库链接" maxlength="512" spellcheck="false" required /></div>
         <div><label class="editor-branch-label">分支</label><input data-field="branch" placeholder="默认分支" maxlength="255" spellcheck="false" /></div>
         <div><label class="editor-mode-label">同步策略</label><select data-field="syncMode"><option value="merge">合并 · 保留提交</option><option value="force">强制 · 对齐上游</option></select></div>
         <button class="remove-repository secondary" type="button" aria-label="移除仓库">移除</button>
-        <p class="force-note" hidden>强制同步会丢弃目标分支的独有提交，并对齐上游同名分支；启用自动同步后也会按此策略覆盖。上游同名分支必须存在。</p>
+        <label class="checkbox-label editor-auto-sync"><input data-field="autoSync" type="checkbox" checked />参与自动同步</label>
+        <p class="force-note" hidden>强制同步会丢弃目标分支的独有提交，并对齐上游同名分支；参与自动同步时也会按此策略覆盖。上游同名分支必须存在。</p>
       </div>
     </template>
   </body>
